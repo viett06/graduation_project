@@ -16,6 +16,6 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user_roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
+    user_roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan",  passive_deletes=True)
 
 

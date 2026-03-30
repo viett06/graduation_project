@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.deps import get_db
 from app.core.security.seeder import seed_rbac
-# Import các controller (đảm bảo đúng đường dẫn file của bạn)
+
 from app.api.enpoints import auth_controller, user_controller
 from app.core.config import settings
 
@@ -40,7 +40,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ── Cấu hình CORS (Nếu bạn gọi API từ React/Vue/Mobile) ────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,17 +48,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Đăng ký Routers (Include Routers) ─────────────────────────
-
-# 1. Auth Router: /auth/login, /auth/register, /auth/refresh
 app.include_router(
     auth_controller.router, 
     prefix=f"{settings.API_V1_STR}/auth", 
     tags=["Auth"]
 )
 
-# 2. User Router: /users/me, /users/{id}, /users/admin/overview
-# Lưu ý: user_controller.router đã có prefix="/users" bên trong file đó
 app.include_router(
     user_controller.router,
     prefix=f"{settings.API_V1_STR}/users",

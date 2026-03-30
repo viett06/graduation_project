@@ -9,8 +9,8 @@ class UserRole(Base):
 
     id = Column(Integer, primary_key=True)
 
-    user_id = Column(Integer, ForeignKey("users.id"), nullable= False)
-    role_id = Column(Integer, ForeignKey("roles.id"),nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id",ondelete="CASCADE"), nullable= False)
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"),nullable=False)
 
     assigned_at = Column(DateTime, server_default=func.now())
     assigned_by = Column(Integer, nullable=True)

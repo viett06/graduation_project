@@ -55,7 +55,7 @@ class RoleService:
         self.__role_repo.delete(role)
         return True
 
-    # ── Assignment ─────────────────────────────────────────────
+    # Assignment
 
     def assign_role_to_user(self, user_id: int, role_id: int, assigned_by: int) -> UserRole:
         existing = self.__assign_repo.get_user_role_link(user_id, role_id)
@@ -71,7 +71,7 @@ class RoleService:
         new_link = PermissionRole(role_id=role_id, permission_id=permission_id)
         return self.__assign_repo.add(new_link)
 
-    # ── Query helpers cho JWT ──────────────────────────────────
+    # Query helpers cho JWT
 
     def get_user_roles(self, user_id: int) -> List[Role]:
         """Lấy tất cả roles của user."""

@@ -59,7 +59,7 @@ class UserService:
                 permissions.add(pr.permission.name)
 
         # 3. Tạo Token với bộ data đã tổng hợp
-        token_data = {"sub": str(user.id), "email": user.email, "is_active": user.is_active, "is_superuser": user.is_superuser}
+        token_data = {"user_id": user.id, "email": user.email, "is_active": user.is_active, "is_superuser": user.is_superuser}
 
         access_token = AuthHandler.create_access_token(
             data=token_data,

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     API_V1_STR: str = "/api/v1"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 3
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     PROJECT_NAME: str = "Auth_Jwt"
