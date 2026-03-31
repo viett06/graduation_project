@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.deps import get_db
 from app.core.security.seeder import seed_rbac
 
-from app.api.enpoints import auth_controller, user_controller
+from app.api.enpoints import auth_controller, user_controller, bank_controller
 from app.core.config import settings
 from redis import asyncio as aioredis
 from dotenv import load_dotenv
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     )
     print("Redis connected.")
 
-    yield  # Ứng dụng chạy ở đây
+    yield 
 
     await app.state.redis.close()
     print("Redis disconnected.")
@@ -67,6 +67,12 @@ app.include_router(
     user_controller.router,
     prefix=f"{settings.API_V1_STR}/users",
     tags=["Users"]
+)
+
+app.include_router(
+    bank_controller.router,
+    prefix=f"{settings.API_V1_STR}/banks",
+    tags=["Banks"]
 )
 
 
