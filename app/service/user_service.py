@@ -4,10 +4,16 @@ from app.models.user import User
 from app.schemas.userSchema import UserCreate, UserUpdate
 from app.core.security.auth_handler import AuthHandler
 from app.repository.user_repository import UserRepository
+import random
+from fastapi import BackgroundTasks, HTTPException, status
+from fastapi_mail import FastMail, MessageSchema, MessageType
+from redis import asyncio as aioredis
+from app.core.email_config import conf
 
 class UserService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, redis_client=None):
         self.__userRepository = UserRepository(session=session)
+        self.__redis = redis_client
 
     def create_user(self, user_data: UserCreate) -> User:
 
@@ -79,3 +85,71 @@ class UserService:
 
     def list_users(self, skip: int = 0, limit: int = 100) -> List[User]:
         return self.__userRepository.get_all(skip, limit)
+
+    async def send_otp(self, email: str, background_tasks: BackgroundTasks):
+        otp_code = str(random.randint(100000,999999))
+
+        await self.__redis.set(f"otp:reset:{email}", otp_code, ex=300)
+
+        html = f"""
+                <p>Chào bạn,</p>
+                <p>Mã OTP của bạn là: <b>{otp_code}</b></p>
+                <p>Mã này sẽ hết hạn sau 5 phút. Vui lòng không chia sẻ cho bất kỳ ai.</p>
+                <p>Đây là email tự động từ hệ thống. Vui lòng không phản hồi lại email này.</p>
+                """
+
+        messages = MessageSchema(
+            subject="Your verification code",
+            recipients=[email],
+            body= html,
+            subtype=MessageType.html,
+            reply_to=["noreply@gmail.com"]
+        )
+
+        fm = FastMail(conf)
+
+        background_tasks.add_task(fm.send_message, messages)
+
+        # return {"status": "success", "message": "OTP has been sent to your email"}
+        print('send otp code successfully')
+        return None
+
+    async def verify_otp(self, otp_code: str, email: str) -> bool:
+        stored_code = await self.__redis.get(f"otp:reset:{email}")
+
+        if otp_code is None:
+            return False
+
+        if stored_code != otp_code:
+            return False
+
+        await self.__redis.delete(f"otp:reset:{email}")
+
+        return True
+
+    async def change_password(self, email: str, new_password: str) -> bool:
+
+        user = self.__userRepository.get_by_email(email)
+
+        if not user:
+            return False
+
+        change_password_hash = AuthHandler.get_password_hash(new_password)
+
+        user.hashed_password = change_password_hash
+
+        user = self.__userRepository.update(user)
+
+        if user:
+            return True
+        else:
+            return False
+
+
+
+
+
+
+
+
+

@@ -61,6 +61,17 @@ class UserRepository:
         self.session.refresh(user_obj)
         return user_obj
 
+    def update(self, user_obj: User) -> Optional[User]:
+        try:
+            self.session.add(user_obj)
+            self.session.commit()
+            self.session.refresh(user_obj)
+            return user_obj
+        except Exception as e:
+            self.session.rollback()
+            print(f"Update error: {e}")
+            return None
+
     def commit(self):
         self.session.commit()
 

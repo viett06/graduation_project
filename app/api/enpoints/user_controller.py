@@ -37,8 +37,6 @@ async def get_me(
     return current_user
 
 
-# ── Endpoint cần permission cụ thể ───────────────────────────
-
 @router.get("", response_model=List[UserResponse])
 async def list_users(
     skip: int = 0,
@@ -72,8 +70,6 @@ async def delete_user(
     """Xóa user — cần permission user:delete."""
     UserService(session).delete_user(user_id)
 
-
-# ── Endpoint chỉ dành cho role cụ thể ────────────────────────
 
 @router.get("/admin/overview")
 async def admin_overview(

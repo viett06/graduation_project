@@ -7,9 +7,9 @@ Thay đổi chính so với bản cũ:
   - register: giữ nguyên, assign default role "user"
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, session
 
 from app.api.deps import get_db
 from app.core.security.auth_handler import AuthHandler
@@ -18,6 +18,8 @@ from app.schemas.userSchema import UserCreate, UserResponse
 from app.service.role_service import RoleService
 from app.service.user_service import UserService
 from app.core.security.rbac import RoleEnum
+
+
 
 router = APIRouter()
 
@@ -109,3 +111,45 @@ async def register(
         return user
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
+async def forgot_password(email: str, request: Request, background_tasks: BackgroundTasks, session: Session = Depends(get_db) ):
+
+    redis_client = request.app.state.redis
+
+    user_service = UserService(session, redis_client)
+
+    return await user_service.send_otp(email, background_tasks)
+
+@router.post("/verify-reset-password")
+async def verify_reset_password(email: str, otp_code: str, newpassword: str, request: Request, session: Session = Depends(get_db),):
+
+    user_service = UserService(session, request.app.state.redis)
+
+    is_valid = user_service.verify_otp(email, otp_code)
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail="OTP code not valid"
+        )
+
+    success = await user_service.change_password(email, newpassword)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    return {"status": "success", "message": "successful change password"}
+
+
+
+
+
+
+
+
+
+
+
+
+

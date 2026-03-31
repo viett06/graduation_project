@@ -57,7 +57,7 @@ class RoleService:
 
     # Assignment
 
-    def assign_role_to_user(self, user_id: int, role_id: int, assigned_by: int) -> UserRole:
+    def assign_role_to_user(self, user_id: int, role_id: int, assigned_by: int | None) -> UserRole:
         existing = self.__assign_repo.get_user_role_link(user_id, role_id)
         if existing:
             return existing

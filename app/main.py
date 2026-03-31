@@ -7,15 +7,17 @@ from app.core.security.seeder import seed_rbac
 
 from app.api.enpoints import auth_controller, user_controller
 from app.core.config import settings
+from redis import asyncio as aioredis
+from dotenv import load_dotenv
 
-
+load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager:
     - Chạy Startup logic: Seed dữ liệu RBAC vào DB.
     - Yield: App bắt đầu nhận request.
-    - Chạy Shutdown logic: (Nếu cần).
+    - Chạy Shutdown logic.
     """
     # ── Startup ──
     db = next(get_db())
@@ -28,9 +30,16 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    app.state.redis = aioredis.from_url(
+        "redis://localhost:6380",
+        decode_responses=True
+    )
+    print("Redis connected.")
+
     yield  # Ứng dụng chạy ở đây
 
-    # ── Shutdown ──
+    await app.state.redis.close()
+    print("Redis disconnected.")
 
 
 app = FastAPI(

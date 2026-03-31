@@ -51,5 +51,6 @@ DEFAULT_ROLE_PERMISSIONS: dict[RoleEnum, list[str]] = {
     ],
     RoleEnum.USER: [
         PermissionEnum.USER_READ.value,
+        PermissionEnum.USER_UPDATE.value
     ],
 }

@@ -60,3 +60,4 @@ class UserInDBBase(UserBase):
 
 class UserResponse(UserInDBBase):
     user_roles: List[UserRoleOut] = []
+

@@ -18,4 +18,8 @@ class User(Base):
 
     user_roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan",  passive_deletes=True)
 
+    chats_sender = relationship("Chat", back_populates="sender",foreign_keys="[Chat.sender_id]", cascade="all, delete-orphan",  passive_deletes=True)
+    chats_receiver = relationship("Chat", back_populates="receiver",foreign_keys="[Chat.receiver_id]", cascade="all, delete-orphan",  passive_deletes=True)
+
+
 
