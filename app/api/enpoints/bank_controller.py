@@ -36,3 +36,4 @@ async def read_banks(
 ):
     service = BankService(session)
     return service.get_all_banks(page=page, size=size)
+

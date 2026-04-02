@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.deps import get_db
 from app.core.security.seeder import seed_rbac
 
-from app.api.enpoints import auth_controller, user_controller, bank_controller
+from app.api.enpoints import auth_controller, user_controller, bank_controller, rate_controller
 from app.core.config import settings
 from redis import asyncio as aioredis
 from dotenv import load_dotenv
@@ -73,6 +73,12 @@ app.include_router(
     bank_controller.router,
     prefix=f"{settings.API_V1_STR}/banks",
     tags=["Banks"]
+)
+
+app.include_router(
+    rate_controller.router,
+    prefix=f"{settings.API_V1_STR}/rates",
+    tags=["Rates"]
 )
 
 
