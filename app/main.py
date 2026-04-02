@@ -9,6 +9,7 @@ from app.api.enpoints import auth_controller, user_controller, bank_controller, 
 from app.core.config import settings
 from redis import asyncio as aioredis
 from dotenv import load_dotenv
+from app.core.middleware.ratelimiter import rate_limit_middleware
 
 load_dotenv()
 @asynccontextmanager
@@ -79,6 +80,10 @@ app.include_router(
     rate_controller.router,
     prefix=f"{settings.API_V1_STR}/rates",
     tags=["Rates"]
+)
+
+app.middleware("http")(
+    rate_limit_middleware
 )
 
 

@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    RATE_LIMIT_CAPACITY: int
+    REFILL_RATE: int
 
     PROJECT_NAME: str = "Auth_Jwt"
 

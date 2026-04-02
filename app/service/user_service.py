@@ -7,7 +7,6 @@ from app.repository.user_repository import UserRepository
 import random
 from fastapi import BackgroundTasks, HTTPException, status
 from fastapi_mail import FastMail, MessageSchema, MessageType
-from redis import asyncio as aioredis
 from app.core.email_config import conf
 
 class UserService:
