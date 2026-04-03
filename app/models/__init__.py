@@ -7,3 +7,4 @@ from app.models.chat import Chat
 from app.models.message import Message
 from app.models.bank import Bank
 from app.models.interestRate import InterestRate
+from app.models.auditLog import AuditLog

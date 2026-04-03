@@ -1,12 +1,18 @@
-from app.schemas.bankSchema import BankCreate
+from app.schemas.bankSchema import BankCreate, UpdateBank
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
 from typing import Optional
 from app.repository.bank_repository import BankRepository
+from app.service.auditLogService import AuditLogService
+from app.enums.auditActionType import AuditActionType
+from app.enums.auditLogEntryType import AuditLogEntryType
+from fastapi.encoders import jsonable_encoder
+
 
 class BankService:
     def __init__(self, session: Session):
         self.__bankRepository = BankRepository(session=session)
+        self.__auditLogService = AuditLogService(session=session)
 
     def create_bank(self, data_bank: BankCreate):
 
@@ -35,6 +41,80 @@ class BankService:
         skip = (page - 1) * size
 
         return self.__bankRepository.get_all_banks(skip=skip, limit=size)
+
+    def delete_bank_and_save_audit_log(self, admin_id:int, bank_id: int):
+
+        bank = self.__bankRepository.get_bank_by_id(bank_id)
+
+        if bank is None:
+            raise ValueError("Bank existed")
+
+        action_type = AuditActionType.DELETE
+
+        entry_type = AuditLogEntryType.BANK
+
+        entity_id = bank.id
+
+        old_value_json = jsonable_encoder(bank)
+
+        self.__auditLogService.create_audit_log(
+            admin_id=admin_id,
+            action_type=action_type,
+            entry_type=entry_type,
+            entity_id=entity_id,
+            old_value=old_value_json,
+            new_value= None,
+        )
+
+
+
+        self.__bankRepository.delete_bank(bank)
+        self.__bankRepository.commit()
+        return {"message": "Delete successful", "id": bank_id}
+
+    def update_bank(self, bank_id: int, admin_id: int, data_bank_update: UpdateBank):
+        bank = self.__bankRepository.get_bank_by_id(bank_id)
+
+        if bank is None:
+            raise ValueError("Bank existed")
+
+        old_value_json = jsonable_encoder(bank)
+
+        entry_type = AuditLogEntryType.BANK
+
+        entity_id = bank.id
+
+        update_data = data_bank_update.model_dump(exclude_unset=True)
+
+        for key, value in update_data.items():
+            setattr(bank, key, value)
+
+        new_value_json = jsonable_encoder(bank)
+
+        action_type = AuditActionType.UPDATE
+
+        self.__auditLogService.create_audit_log(
+            admin_id=admin_id,
+            action_type=action_type,
+            entry_type=entry_type,
+            entity_id=entity_id,
+            old_value=old_value_json,
+            new_value = new_value_json,
+        )
+
+        self.__bankRepository.update_bank(bank)
+
+        self.__bankRepository.commit()
+        self.__bankRepository.refresh(bank)
+
+        return bank
+
+
+
+
+
+
+
 
 
 

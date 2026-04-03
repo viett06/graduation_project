@@ -39,3 +39,29 @@ class BankRepository:
                                       .limit(limit))
 
         return self.session.execute(banks).scalars().all()
+
+    def delete_bank(self, bank_obj: Bank):
+        try:
+            self.session.delete(bank_obj)
+            # self.session.commit()
+            # self.session.refresh(bank_obj)
+            return bank_obj
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
+    def update_bank(self, bank_obj: Bank)-> Bank:
+        try:
+            self.session.add(bank_obj)
+            # self.session.commit()
+            # self.session.refresh(bank_obj)
+            return bank_obj
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
+    def commit(self):
+        self.session.commit()
+
+    def refresh(self, bank_obj: Bank):
+        self.session.refresh(bank_obj)

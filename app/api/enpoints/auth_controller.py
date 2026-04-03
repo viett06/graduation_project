@@ -92,7 +92,7 @@ async def refresh_token(
     )
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register/user", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
     session: Session = Depends(get_db),
@@ -105,6 +105,47 @@ async def register(
         user = user_service.create_user(user_data)
 
         default_role = role_service.get_role_by_name(RoleEnum.USER.value)
+        if default_role:
+            role_service.assign_role_to_user(user.id, default_role.id, user.id)
+
+        return user
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/register/manager", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    user_data: UserCreate,
+    session: Session = Depends(get_db),
+):
+    """Đăng ký user mới với default role 'manager'."""
+    user_service = UserService(session)
+    role_service  = RoleService(session)
+
+    try:
+        user = user_service.create_user(user_data)
+
+        default_role = role_service.get_role_by_name(RoleEnum.MANAGER.value)
+        if default_role:
+            role_service.assign_role_to_user(user.id, default_role.id, user.id)
+
+        return user
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/register/admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    user_data: UserCreate,
+    session: Session = Depends(get_db),
+):
+    """Đăng ký user mới với default role 'admin'."""
+    user_service = UserService(session)
+    role_service  = RoleService(session)
+
+    try:
+        user = user_service.create_user(user_data)
+
+        default_role = role_service.get_role_by_name(RoleEnum.ADMIN.value)
         if default_role:
             role_service.assign_role_to_user(user.id, default_role.id, user.id)
 

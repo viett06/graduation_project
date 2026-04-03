@@ -15,11 +15,12 @@ class InterestRate(Base):
     is_current = Column(Boolean, nullable=False)
     note = Column(Text)
     create_by = Column(Integer, ForeignKey("users.id",ondelete="SET NULL"), nullable=True)
-    bank_id = Column(Integer, ForeignKey("banks.id"), nullable=False)
+    bank_id = Column(Integer, ForeignKey("banks.id",ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     bank = relationship("Bank", back_populates="interest_rates")
+    user = relationship("User", back_populates="interest_rates")
 
 
 
