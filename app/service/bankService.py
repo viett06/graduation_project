@@ -1,7 +1,7 @@
-from app.schemas.bankSchema import BankCreate, UpdateBank
+from app.schemas.bankSchema import BankCreate, UpdateBank, BankRateResponse
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
-from typing import Optional
+from typing import Optional, List
 from app.repository.bank_repository import BankRepository
 from app.service.auditLogService import AuditLogService
 from app.enums.auditActionType import AuditActionType
@@ -108,6 +108,37 @@ class BankService:
         self.__bankRepository.refresh(bank)
 
         return bank
+
+    def get_banks_by_month_and_amount(self, term_month: int, amount: float = 0, page: int = 1, size: int = 10) -> List[BankRateResponse]:
+        if page < 1:
+            page = 1
+        skip = (page - 1) * size
+
+        rows = self.__bankRepository.get_bank_rates(term_month, amount, skip, size)
+
+        print("ROWS:", rows)
+
+        if rows is None:
+            return []
+
+
+        # new_list = [expression for item in iterable if condition] | list comprehension
+        try:
+            return [
+                BankRateResponse(
+                    bank = row.name,
+                    logo_url=row.logo_url,
+                    type=row.type,
+                    rate=float(row.rate) if row.rate else None,
+                    updated_at=row.updated_at,
+                    rate_source=row.rate_source
+                )
+                for row in rows
+            ]
+        except Exception as e:
+            print("ERROR:", e)
+            raise
+
 
 
 

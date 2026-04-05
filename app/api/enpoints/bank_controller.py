@@ -1,11 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, logger
 from typing import List, Dict
 from app.api.deps import get_db
 from app.schemas.bankSchema import BankResponse
-from sqlalchemy.orm import Session
-from app.service.bankService import BankService, UpdateBank
+from sqlalchemy.orm import Session, session
+from app.service.bankService import BankService, UpdateBank, BankRateResponse
 from app.schemas.bankSchema import BankCreate
 from app.core.security.rbac import PermissionEnum, RoleEnum
 from app.core.security.guards import require_permissions, require_roles
@@ -25,6 +25,19 @@ async def create_bank(data_bank: BankCreate, session: Session = Depends(get_db))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/bank_rates",response_model=List[BankRateResponse])
+async def read_bank_rates(
+        term_month: int,
+        amount: float = 0,
+    page: int = 1,
+    size: int = 10,
+        session: Session = Depends(get_db),
+):
+    # logger.info(f"term_month={term_month}, amount={amount}, page={page}, size={size}")
+    service = BankService(session)
+    return service.get_banks_by_month_and_amount(term_month, amount, page, size)
+
+
 @router.get("/{bank_id}",response_model=BankResponse)
 async def get_detail_bank (bank_id: int, session: Session = Depends(get_db)):
     bank_service = BankService(session)
@@ -42,7 +55,6 @@ async def read_banks(
 ):
     service = BankService(session)
     return service.get_all_banks(page=page, size=size)
-
 
 @router.put("/{bank_id}",response_model=BankResponse)
 async def update_bank(bank_id: int, data_update_bank: UpdateBank, session: Session = Depends(get_db), current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
@@ -75,3 +87,5 @@ async def delete_bank(bank_id: int, session: Session = Depends(get_db), current_
     except Exception as e:
         logging.exception(e)
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+

@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import select, desc, exists
+from sqlalchemy import select, desc, exists, text
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
 
@@ -65,3 +65,36 @@ class BankRepository:
 
     def refresh(self, bank_obj: Bank):
         self.session.refresh(bank_obj)
+
+    def get_bank_rates(self, term_month: int, amount: float, skip: int = 0, size: int = 10):
+        query = text("""
+                     SELECT b.name,
+                            b.logo_url,
+                            b.type,
+                            ir.rate,
+                            ir.updated_at,
+                            b.rate_source
+                     FROM banks AS b
+                              JOIN interest_rates AS ir
+                                        ON b.id = ir.bank_id
+                     WHERE 1=1
+                        AND ir.term_month = :term_month
+                       AND b.status = TRUE
+                       AND ir.min_amount <= :amount
+                       AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
+                         ORDER BY ir.rate DESC
+                         OFFSET :skip
+                         LIMIT :size
+                     """)
+
+        result = self.session.execute(
+            query,
+            {
+                "term_month": term_month,
+                "amount": amount,
+                "skip": skip,
+                "size": size
+            }
+        )
+
+        return result.fetchall()

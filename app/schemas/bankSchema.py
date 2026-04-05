@@ -34,5 +34,13 @@ class BankInDBBase(BankBase):
 class BankResponse(BankInDBBase):
     pass
 
+class BankRateResponse(BaseModel):
+    bank: str | None
+    logo_url: str | None
+    type: str | None
+    rate: float | None
+    updated_at: datetime | None
+    rate_source: str | None
+
 
 
