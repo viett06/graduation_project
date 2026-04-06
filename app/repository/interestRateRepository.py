@@ -50,3 +50,31 @@ class InterestRateRepository:
     def rollback(self, error: Exception):
         self.__session.rollback()
         raise error
+
+    def refresh(self, interest_rate: InterestRate):
+        self.__session.refresh(interest_rate)
+
+    def delete_rate(self, interest_rate: InterestRate):
+        try:
+            self.__session.delete(interest_rate)
+            # self.session.commit()
+            # self.session.refresh(bank_obj)
+            return interest_rate
+        except Exception as e:
+            self.__session.rollback()
+            raise e
+
+    def update_rate(self, interest_rate: InterestRate)-> InterestRate:
+        try:
+            self.__session.add(interest_rate)
+            # self.session.commit()
+            # self.session.refresh(bank_obj)
+            return interest_rate
+        except Exception as e:
+            self.__session.rollback()
+            raise e
+
+    def find_interest_rate_by_id(self, rate_id: int) -> Optional[InterestRate]:
+        stmt = select(InterestRate).where(InterestRate.id == rate_id)
+        return self.__session.execute(stmt).scalar_one_or_none()
+

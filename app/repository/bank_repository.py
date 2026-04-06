@@ -24,7 +24,7 @@ class BankRepository:
             raise e
 
     def get_bank_by_id(self, bank_id: int)-> Optional[Bank]:
-        bank = select(Bank).where(Bank.id == bank_id)
+        bank = select(Bank).where((Bank.id == bank_id) & (Bank.status == True))
         return self.session.execute(bank).scalars().one_or_none()
 
     def check_code_exists(self, bank_code: str) -> bool:
@@ -36,23 +36,15 @@ class BankRepository:
     def get_all_banks(self, skip: int =0, limit: int =10):
         banks = (select(Bank).order_by(Bank.id.asc())
                                       .offset(skip)
-                                      .limit(limit))
+                                      .limit(limit)).where(Bank.status == True)
 
         return self.session.execute(banks).scalars().all()
 
+
     def delete_bank(self, bank_obj: Bank):
         try:
-            self.session.delete(bank_obj)
-            # self.session.commit()
-            # self.session.refresh(bank_obj)
-            return bank_obj
-        except Exception as e:
-            self.session.rollback()
-            raise e
-
-    def update_bank(self, bank_obj: Bank)-> Bank:
-        try:
-            self.session.add(bank_obj)
+            bank_obj.status = False
+            self.session.add(bank_obj)  # optional, nếu object đã attach thì không cần
             # self.session.commit()
             # self.session.refresh(bank_obj)
             return bank_obj
@@ -80,6 +72,7 @@ class BankRepository:
                      WHERE 1=1
                         AND ir.term_month = :term_month
                        AND b.status = TRUE
+                         AND (:type IS NULL OR b.type = :type) 
                        AND ir.min_amount <= :amount
                        AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
                          ORDER BY ir.rate DESC

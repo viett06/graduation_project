@@ -16,13 +16,13 @@ class BankService:
 
     def create_bank(self, data_bank: BankCreate):
 
-        existing_bank = self.__bankRepository.find_bank_by_name(data_bank.name)
+        # existing_bank = self.__bankRepository.find_bank_by_name(data_bank.name)
+        #
+        # if existing_bank:
+        #     raise ValueError("Bank already exists")
 
-        if existing_bank:
-            raise ValueError("Bank already exists")
-
-        if self.__bankRepository.check_code_exists(data_bank.code):
-            raise ValueError("Bank code already exists")
+        # if self.__bankRepository.check_code_exists(data_bank.code):
+        #     raise ValueError("Bank code already exists")
 
         bank = Bank(**data_bank.model_dump())
 
@@ -76,7 +76,7 @@ class BankService:
         bank = self.__bankRepository.get_bank_by_id(bank_id)
 
         if bank is None:
-            raise ValueError("Bank existed")
+            raise ValueError("Bank not found")
 
         old_value_json = jsonable_encoder(bank)
 

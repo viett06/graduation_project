@@ -48,6 +48,7 @@ async def is_rate_limited(key: str, request: Request)-> bool:
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
 
+    # config cho từng cái
     client_ip = request.client.host
 
     if await is_rate_limited(client_ip, request):

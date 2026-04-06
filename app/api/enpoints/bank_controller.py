@@ -43,6 +43,8 @@ async def get_detail_bank (bank_id: int, session: Session = Depends(get_db)):
     bank_service = BankService(session)
     try:
         bank = bank_service.get_bank_by_id(bank_id)
+        if not bank:
+            raise HTTPException(status_code=404, detail="Bank not found")
         return bank
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
