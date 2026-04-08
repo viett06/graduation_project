@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select, desc, exists, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.models.bank import Bank
 
 
@@ -91,3 +91,29 @@ class BankRepository:
         )
 
         return result.fetchall()
+
+    def get_bank_by_name_or_code_or_both(self, name: str, code: str) -> Optional[List[dict]]:
+        query = text("""
+                     SELECT *
+                     FROM banks b
+                     WHERE 
+            (:code IS NULL AND :name IS NULL)
+            OR (:code IS NOT NULL AND b.code = :code)
+            OR (:name IS NOT NULL AND b.name = :name)
+    """)
+        result = self.session.execute(
+            query,
+            {
+                "code": code,
+                "name": name
+            }
+        )
+        return result.mappings().all()
+
+    # Trong BankRepository
+    def get_rates_of_bank(self, bank_id: int) -> Bank | None:
+        # Sử dụng joinedload lồng object thay join trong sql
+        return self.session.query(Bank).options(
+            joinedload(Bank.interest_rates)
+        ).filter(Bank.id == bank_id, Bank.status == True).first()
+

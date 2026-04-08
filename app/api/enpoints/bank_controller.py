@@ -1,8 +1,9 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, logger
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.api.deps import get_db
+from app.repository.bank_repository import BankRepository
 from app.schemas.bankSchema import BankResponse
 from sqlalchemy.orm import Session, session
 from app.service.bankService import BankService, UpdateBank, BankRateResponse
@@ -36,6 +37,20 @@ async def read_bank_rates(
     # logger.info(f"term_month={term_month}, amount={amount}, page={page}, size={size}")
     service = BankService(session)
     return service.get_banks_by_month_and_amount(term_month, amount, page, size)
+
+@router.get("/search", response_model=List[BankResponse])
+async def bank_search(name: Optional[str] = None, code: Optional[str] = None,  session: Session = Depends(get_db)):
+    service = BankService(session)
+
+    try:
+        bank_searchs = service.get_bank_by_name_or_code_or_both(name, code)
+        return bank_searchs
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # logging.exception(e)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 
 @router.get("/{bank_id}",response_model=BankResponse)
@@ -89,5 +104,21 @@ async def delete_bank(bank_id: int, session: Session = Depends(get_db), current_
     except Exception as e:
         logging.exception(e)
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@router.get("/bank_rates/{bank_id}", response_model=BankResponse)
+async def get_rates_bank(bank_id: int, session: Session = Depends(get_db)):
+    bank_service = BankService(session)
+    try:
+        bank = bank_service.get_rates_of_bank(bank_id)
+        if not bank:
+            raise HTTPException(status_code=404, detail="Bank not found")
+        return bank
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
 
 

@@ -140,6 +140,18 @@ class BankService:
             raise
 
 
+    def get_bank_by_name_or_code_or_both(self, name: str, code: str) -> Optional[List[Bank]]:
+
+        banks = self.__bankRepository.get_bank_by_name_or_code_or_both(name, code)
+
+        return [Bank(**bank) for bank in banks]
+
+    def get_rates_of_bank(self, bank_id: int) -> Bank | None:
+            bank = self.__bankRepository.get_rates_of_bank(bank_id)
+            return bank
+
+
+
 
 
 

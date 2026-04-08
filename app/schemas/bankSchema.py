@@ -25,6 +25,17 @@ class UpdateBank(BaseModel):
     rate_source: Optional[str] = None
     status: Optional[bool] = True
 
+class InterestRateResponse(BaseModel):
+    id: int
+    rate: float | None
+    created_at: datetime
+    updated_at: datetime
+    term_month: int | None
+    min_amount: int | None
+    max_amount: int | None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class BankInDBBase(BankBase):
     id: int
     created_at: datetime
@@ -32,7 +43,9 @@ class BankInDBBase(BankBase):
     model_config = ConfigDict(from_attributes=True)
 
 class BankResponse(BankInDBBase):
-    pass
+    interest_rates: list[InterestRateResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
 
 class BankRateResponse(BaseModel):
     bank: str | None
