@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional, List
 from sqlalchemy import select, desc, exists, text
 from sqlalchemy.orm import Session, joinedload
@@ -110,10 +111,39 @@ class BankRepository:
         )
         return result.mappings().all()
 
-    # Trong BankRepository
     def get_rates_of_bank(self, bank_id: int) -> Bank | None:
         # Sử dụng joinedload lồng object thay join trong sql
         return self.session.query(Bank).options(
             joinedload(Bank.interest_rates)
         ).filter(Bank.id == bank_id, Bank.status == True).first()
+
+    def get_applied_rate(self, bank_id: int, term_month: int, amount: float, deposit_date: date):
+
+        query = text("""
+                     SELECT rate
+                     FROM interest_rates
+                     WHERE 1 = 1
+                       AND  bank_id = :bank_id
+                       AND term_month = :term_month
+                       AND min_amount <= :amount
+                       AND (max_amount > :amount OR max_amount IS NULL)
+                       AND effective_date <= :deposit_date
+                     ORDER BY effective_date DESC LIMIT 1
+                     """)
+
+        result = self.session.execute(query, {
+            "bank_id": bank_id,
+            "term_month": term_month,
+            "amount": amount,
+            "deposit_date": deposit_date
+        }).fetchone()
+
+        return result[0] if result else None
+
+    def get_available_terms(self, bank_id: int) -> List[int]:
+
+        query = select(text("DISTINCT term_month")).textual_select_collector_style()
+        query = text("SELECT DISTINCT term_month FROM interest_rates WHERE bank_id = :bank_id ORDER BY term_month")
+        result = self.session.execute(query, {"bank_id": bank_id}).fetchall()
+        return [row[0] for row in result]
 

@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, logger
 from typing import List, Dict, Optional
 from app.api.deps import get_db
 from app.repository.bank_repository import BankRepository
-from app.schemas.bankSchema import BankResponse
+from app.schemas.bankSchema import BankResponse, UpdateBank, BankCreate, UpdateBank, BankRateResponse, InterestCalculateRequest, InterestCalculateResponse
 from sqlalchemy.orm import Session, session
-from app.service.bankService import BankService, UpdateBank, BankRateResponse
+from app.service.bankService import BankService
 from app.schemas.bankSchema import BankCreate
 from app.core.security.rbac import PermissionEnum, RoleEnum
 from app.core.security.guards import require_permissions, require_roles
@@ -62,6 +62,23 @@ async def get_detail_bank (bank_id: int, session: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Bank not found")
         return bank
     except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# @router.get("/{bank_id}/terms", response_model=List[int])
+# async def get_bank_terms(bank_id: int, session: Session = Depends(get_db)):
+#     service = BankService(session)
+#     return service.get_bank_terms(bank_id)
+
+@router.post("/calculate", response_model=InterestCalculateResponse)
+async def calculate_interest(
+    data: InterestCalculateRequest,
+    session: Session = Depends(get_db)
+):
+
+    service = BankService(session)
+    try:
+        return service.calculate_interest(data)
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("", response_model=List[BankResponse])

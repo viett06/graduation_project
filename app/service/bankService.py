@@ -1,4 +1,7 @@
-from app.schemas.bankSchema import BankCreate, UpdateBank, BankRateResponse
+from datetime import datetime
+
+from app.schemas.bankSchema import BankCreate, UpdateBank, BankRateResponse, InterestRateResponse, \
+    InterestCalculateRequest, InterestCalculateResponse
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
 from typing import Optional, List
@@ -7,6 +10,8 @@ from app.service.auditLogService import AuditLogService
 from app.enums.auditActionType import AuditActionType
 from app.enums.auditLogEntryType import AuditLogEntryType
 from fastapi.encoders import jsonable_encoder
+from datetime import date, timedelta
+import calendar
 
 
 class BankService:
@@ -150,6 +155,52 @@ class BankService:
             bank = self.__bankRepository.get_rates_of_bank(bank_id)
             return bank
 
+    def calculate_maturity_date(self, deposit_date: date, term_month: int) -> date:
+
+        month = deposit_date.month - 1 + term_month
+        year = deposit_date.year + month // 12
+        month = month % 12 + 1
+        day = min(deposit_date.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day)
+
+    def calculate_interest(self, calc_data: InterestCalculateRequest) -> InterestCalculateResponse:
+
+        bank = self.__bankRepository.get_bank_by_id(calc_data.bank_id)
+        if not bank:
+            raise ValueError("The bank does not exist or has been hidden.")
+
+
+        rate = self.__bankRepository.get_applied_rate(
+            calc_data.bank_id,
+            calc_data.term_month,
+            calc_data.amount,
+            calc_data.deposit_date
+        )
+
+        if rate is None:
+            raise ValueError(
+                f"No suitable interest rate found for this term. {calc_data.term_month} month at this time.")
+
+        maturity_date = self.calculate_maturity_date(calc_data.deposit_date, calc_data.term_month)
+        total_days = (maturity_date - calc_data.deposit_date).days
+
+        #Actual/365: Tiền lãi = Gốc * %Lãi * (Số ngày / 365)
+        # interest_amount = calc_data.amount * (rate / 100) * (total_days / 365)
+        interest_amount = calc_data.amount * (float(rate) / 100) * (total_days / 365)
+
+        return InterestCalculateResponse(
+            bank_name=bank.name,
+            interest_rate=rate,
+            term_month=calc_data.term_month,
+            deposit_date=calc_data.deposit_date,
+            maturity_date=maturity_date,
+            total_days=total_days,
+            interest_amount=round(interest_amount, 2),
+            total_amount=round(calc_data.amount + interest_amount, 2)
+        )
+
+    # def get_bank_terms(self, bank_id: int) -> List[int]:
+    #     return self.__bankRepository.get_available_terms(bank_id)
 
 
 

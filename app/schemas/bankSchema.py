@@ -1,8 +1,9 @@
 from socket import fromfd
 
-from pydantic import BaseModel, ConfigDict
-from datetime import datetime
 from typing import Optional
+from pydantic import BaseModel, Field, ConfigDict
+from datetime import date, datetime
+
 
 class BankBase(BaseModel):
     name: str
@@ -36,6 +37,8 @@ class InterestRateResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+
 class BankInDBBase(BankBase):
     id: int
     created_at: datetime
@@ -54,6 +57,22 @@ class BankRateResponse(BaseModel):
     rate: float | None
     updated_at: datetime | None
     rate_source: str | None
+
+class InterestCalculateRequest(BaseModel):
+    bank_id: int
+    term_month: int
+    amount: float = Field(gt=0, description="The deposit amount must be greater than 0.")
+    deposit_date: date = Field(default_factory=date.today)
+
+class InterestCalculateResponse(BaseModel):
+    bank_name: str
+    interest_rate: float
+    term_month: int
+    deposit_date: date
+    maturity_date: date
+    total_days: int
+    interest_amount: float
+    total_amount: float
 
 
 
