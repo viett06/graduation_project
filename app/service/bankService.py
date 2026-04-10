@@ -52,30 +52,43 @@ class BankService:
         bank = self.__bankRepository.get_bank_by_id(bank_id)
 
         if bank is None:
-            raise ValueError("Bank existed")
+            raise ValueError("Bank not found")
 
-        action_type = AuditActionType.DELETE
+        rates = self.__bankRepository.get_rates_for_delete_bank(bank_id)
+        for rate in rates:
+            self.__auditLogService.create_audit_log(
+                admin_id=admin_id,
+                action_type=AuditActionType.DELETE,
+                entry_type=AuditLogEntryType.INTEREST_RATE,
+                entity_id=rate['id'],
+                old_value=jsonable_encoder(rate),
+                new_value=None
+            )
 
-        entry_type = AuditLogEntryType.BANK
+        action_type_bank = AuditActionType.DELETE
 
-        entity_id = bank.id
+        entry_type_bank = AuditLogEntryType.BANK
 
-        old_value_json = jsonable_encoder(bank)
+        entity_id_bank = bank.id
+
+        old_value_json_bank = jsonable_encoder(bank)
 
         self.__auditLogService.create_audit_log(
             admin_id=admin_id,
-            action_type=action_type,
-            entry_type=entry_type,
-            entity_id=entity_id,
-            old_value=old_value_json,
+            action_type=action_type_bank,
+            entry_type=entry_type_bank,
+            entity_id=entity_id_bank,
+            old_value=old_value_json_bank,
             new_value= None,
         )
 
-
+        self.__bankRepository.delete_rates_of_bank(bank.id)
 
         self.__bankRepository.delete_bank(bank)
+
         self.__bankRepository.commit()
         return {"message": "Delete successful", "id": bank_id}
+
 
     def update_bank(self, bank_id: int, admin_id: int, data_bank_update: UpdateBank):
         bank = self.__bankRepository.get_bank_by_id(bank_id)

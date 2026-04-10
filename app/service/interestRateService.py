@@ -100,6 +100,7 @@ class InterestRateService:
         self.__interestRateRepository.commit()
         return {"message": "Delete successful", "id": interest_rate_db.id}
 
+
     def update_interest_rate(self, rate_id: int, admin_id: int, data_bank_update: InterestRateUpdate):
 
         interest_rate_db = self.__interestRateRepository.find_interest_rate_by_id(rate_id)

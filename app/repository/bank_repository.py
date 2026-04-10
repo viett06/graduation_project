@@ -45,13 +45,30 @@ class BankRepository:
     def delete_bank(self, bank_obj: Bank):
         try:
             bank_obj.status = False
-            self.session.add(bank_obj)  # optional, nếu object đã attach thì không cần
+            self.session.add(bank_obj)  # optional,
             # self.session.commit()
             # self.session.refresh(bank_obj)
             return bank_obj
         except Exception as e:
             self.session.rollback()
             raise e
+
+    def delete_rates_of_bank(self, bank_id: int):
+        query = text("""
+        DELETE FROM interest_rates
+            WHERE bank_id = :bank_id
+        """)
+        try:
+            self.session.execute(query, {"bank_id": bank_id})
+            # self.session.commit()
+        except Exception as e:
+            self.session.rollback()
+            print(f"error: {e}")
+            raise e
+
+    def get_rates_for_delete_bank(self, bank_id: int):
+        query = text("SELECT * FROM interest_rates WHERE bank_id = :bank_id")
+        return self.session.execute(query, {"bank_id": bank_id}).mappings().all()
 
     def commit(self):
         self.session.commit()
