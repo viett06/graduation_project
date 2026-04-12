@@ -71,7 +71,8 @@ async def delete_user(
     UserService(session).delete_user(user_id)
 
 
-@router.get("/admin/overview")
+@router.get("/admin/o"
+            "verview")
 async def admin_overview(
     session: Session = Depends(get_db),
     # Chỉ ADMIN hoặc MANAGER được vào
