@@ -14,7 +14,9 @@ from app.core.security.dependencies import get_current_active_user
 
 router = APIRouter()
 @router.post("",response_model=BankResponse)
-async def create_bank(data_bank: BankCreate, session: Session = Depends(get_db)):
+async def create_bank(data_bank: BankCreate,
+                      session: Session = Depends(get_db),
+                      current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
     bank_service = BankService(session)
 
 
@@ -30,13 +32,14 @@ async def create_bank(data_bank: BankCreate, session: Session = Depends(get_db))
 async def read_bank_rates(
         term_month: int,
         amount: float = 0,
+        type: str = None,
     page: int = 1,
     size: int = 10,
         session: Session = Depends(get_db),
 ):
     # logger.info(f"term_month={term_month}, amount={amount}, page={page}, size={size}")
     service = BankService(session)
-    return service.get_banks_by_month_and_amount(term_month, amount, page, size)
+    return service.get_banks_by_month_and_amount(term_month, amount,type, page, size)
 
 @router.get("/search", response_model=List[BankResponse])
 async def bank_search(name: Optional[str] = None, code: Optional[str] = None,  session: Session = Depends(get_db)):

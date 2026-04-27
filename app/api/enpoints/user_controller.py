@@ -30,23 +30,24 @@ router = APIRouter()
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(
-    # Chỉ cần login, không cần quyền đặc biệt
     current_user: Dict[str, Any] = Depends(get_current_active_user),
+    session: Session = Depends(get_db),
 ):
     """Lấy thông tin user hiện tại."""
-    return current_user
+    user_id = current_user.get("user_id")
+    return UserService(session).get_user(user_id)
 
 
 @router.get("", response_model=List[UserResponse])
 async def list_users(
-    skip: int = 0,
-    limit: int = 100,
+    page: int = 1,
+    size: int = 10,
     session: Session = Depends(get_db),
     # Chỉ user có quyền USER_READ mới vào được
-    _: Dict = Depends(require_permissions(PermissionEnum.USER_READ)),
+    current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
     """Danh sách users — cần permission user:read."""
-    return UserService(session).list_users(skip, limit)
+    return UserService(session).list_users(page = page, size = size)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
@@ -71,12 +72,11 @@ async def delete_user(
     UserService(session).delete_user(user_id)
 
 
-@router.get("/admin/o"
-            "verview")
-async def admin_overview(
-    session: Session = Depends(get_db),
-    # Chỉ ADMIN hoặc MANAGER được vào
-    current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
-):
-    """Dashboard admin — chỉ ADMIN hoặc MANAGER."""
-    return {"total_users": UserService(session).count_users()}
+# @router.get("/admin/overview")
+# async def admin_overview(
+#     session: Session = Depends(get_db),
+#     # Chỉ ADMIN hoặc MANAGER được vào
+#     current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
+# ):
+#     """Dashboard admin — chỉ ADMIN hoặc MANAGER."""
+#     return {"total_users": UserService(session).count_users()}

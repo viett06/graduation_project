@@ -76,7 +76,7 @@ class BankRepository:
     def refresh(self, bank_obj: Bank):
         self.session.refresh(bank_obj)
 
-    def get_bank_rates(self, term_month: int, amount: float, skip: int = 0, size: int = 10):
+    def get_bank_rates(self, term_month: int, amount: float,type: str,  skip: int = 0, size: int = 10):
         query = text("""
                      SELECT b.name,
                             b.logo_url,
@@ -104,7 +104,8 @@ class BankRepository:
                 "term_month": term_month,
                 "amount": amount,
                 "skip": skip,
-                "size": size
+                "size": size,
+                "type": type
             }
         )
 

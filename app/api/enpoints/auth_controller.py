@@ -6,6 +6,7 @@ Thay đổi chính so với bản cũ:
   - refresh: query lại DB → đảm bảo token mới có roles mới nhất
   - register: giữ nguyên, assign default role "user"
 """
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
@@ -13,13 +14,13 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.security.auth_handler import AuthHandler
+from app.core.security.guards import require_permissions, require_roles
 from app.schemas.token import RefreshToken, Token
 from app.schemas.userSchema import UserCreate, UserResponse
 from app.service.role_service import RoleService
 from app.service.user_service import UserService
-from app.core.security.rbac import RoleEnum
-
-
+from app.core.security.rbac import RoleEnum, PermissionEnum
+from app.core.redis import redis_config
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ async def login(
     if not result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect email or password or account not active",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return Token(**result)
@@ -95,14 +96,19 @@ async def refresh_token(
 @router.post("/register/user", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
+    request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
 ):
     """Đăng ký user mới với default role 'user'."""
-    user_service = UserService(session)
+
+
+    user_service = UserService(session, redis_config.redis_client)
     role_service  = RoleService(session)
 
     try:
-        user = user_service.create_user(user_data)
+
+        user = await user_service.create_user(user_data, background_tasks=background_tasks)
 
         default_role = role_service.get_role_by_name(RoleEnum.USER.value)
         if default_role:
@@ -112,18 +118,54 @@ async def register(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+@router.post("/verify-user", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def verify_reset_password(email: str, otp_code: str, request: Request, session: Session = Depends(get_db),):
+
+    user_service = UserService(session, redis_config.redis_client)
+
+    is_valid = await user_service.verify_otp(email, otp_code, type_send="create_user")
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail="OTP code not valid"
+        )
+
+    user = await user_service.get_user_by_email(email)
+
+    user = await user_service.set_active_user(user)
+
+    print(f"DEBUG: Email received from API: {email}")
+
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="User not found"
+        )
+
+    success = await user_service.update_data_user_verify(user)
+
+    if not success:
+        print(f"DEBUG: success: {success}")
+        raise HTTPException(status_code=404, detail="user not found")
+
+    return success
+
 
 @router.post("/register/manager", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
+    current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
-    """Đăng ký user mới với default role 'manager'."""
-    user_service = UserService(session)
+
+    user_service = UserService(session, redis_config.redis_client)
     role_service  = RoleService(session)
 
     try:
-        user = user_service.create_user(user_data)
+
+        user = await user_service.create_user(user_data, background_tasks=background_tasks)
 
         default_role = role_service.get_role_by_name(RoleEnum.MANAGER.value)
         if default_role:
@@ -136,14 +178,16 @@ async def register(
 @router.post("/register/admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
+    current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
     """Đăng ký user mới với default role 'admin'."""
-    user_service = UserService(session)
+    user_service = UserService(session, redis_config.redis_client)
     role_service  = RoleService(session)
 
     try:
-        user = user_service.create_user(user_data)
+        user = await user_service.create_user(user_data, background_tasks=background_tasks)
 
         default_role = role_service.get_role_by_name(RoleEnum.ADMIN.value)
         if default_role:
@@ -154,20 +198,20 @@ async def register(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 @router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
-async def forgot_password(email: str, request: Request, background_tasks: BackgroundTasks, session: Session = Depends(get_db) ):
+async def forgot_password(email: str, background_tasks: BackgroundTasks, session: Session = Depends(get_db) ):
 
-    redis_client = request.app.state.redis
+    # redis_client = request.app.state.redis
 
-    user_service = UserService(session, redis_client)
+    user_service = UserService(session, redis_config.redis_client)
 
-    return await user_service.send_otp(email, background_tasks)
+    return await user_service.send_otp(email,type_send="reset_password", background_tasks=background_tasks)
 
 @router.post("/verify-reset-password")
-async def verify_reset_password(email: str, otp_code: str, newpassword: str, request: Request, session: Session = Depends(get_db),):
+async def verify_reset_password(email: str, otp_code: str, newpassword: str, session: Session = Depends(get_db),):
 
-    user_service = UserService(session, request.app.state.redis)
+    user_service = UserService(session, redis_config.redis_client)
 
-    is_valid = user_service.verify_otp(email, otp_code)
+    is_valid = await user_service.verify_otp(email, otp_code, type_send="reset_password")
 
     if not is_valid:
         raise HTTPException(

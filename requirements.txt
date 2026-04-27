@@ -13,3 +13,8 @@ pydantic[email]==2.6.4
 passlib[bcrypt]
 redis>=5.0.0
 fastapi-mail>=1.4.1
+beautifulsoup4
+lxml
+apscheduler>=3.10.4
+requests
+httpx

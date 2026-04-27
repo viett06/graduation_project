@@ -12,7 +12,9 @@ from app.service.interestRateService import InterestRateService
 router = APIRouter(prefix="/interest-rates", tags=["Interest Rates"])
 
 @router.post("/", response_model=InterestRateResponse, status_code=status.HTTP_201_CREATED)
-def create_single_rate(data: InterestRateCreate, session: Session = Depends(get_db)):
+def create_single_rate(data: InterestRateCreate,
+                       session: Session = Depends(get_db),
+                       current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
     service = InterestRateService(session)
     try:
         return service.create_interest_rate(data)
@@ -20,7 +22,9 @@ def create_single_rate(data: InterestRateCreate, session: Session = Depends(get_
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/bulk", response_model=List[InterestRateResponse], status_code=status.HTTP_201_CREATED)
-def create_multiple_rates(data: List[InterestRateCreate], session: Session = Depends(get_db)):
+def create_multiple_rates(data: List[InterestRateCreate],
+                          session: Session = Depends(get_db),
+                          current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
     """
     Endpoint for bulk creation (Matrix input from Frontend).
     If one month fails, all changes are rolled back.
@@ -34,7 +38,10 @@ def create_multiple_rates(data: List[InterestRateCreate], session: Session = Dep
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.put("/{interest_rate_id}",response_model=InterestRateResponse)
-async def update_rate(interest_rate_id: int, data_update_rate: InterestRateUpdate, session: Session = Depends(get_db), current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
+async def update_rate(interest_rate_id: int,
+                      data_update_rate: InterestRateUpdate,
+                      session: Session = Depends(get_db),
+                      current_user: Dict = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),):
     interest_rate_service = InterestRateService(session)
     admin_id = current_user.get("user_id")
 

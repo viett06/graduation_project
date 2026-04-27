@@ -16,7 +16,7 @@ class UserRepository:
     def get_by_email(self, email: str) -> Optional[User]:
         return self.session.query(User).filter(User.email == email).first()
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> List[User]:
+    def get_all(self, skip: int = 0, limit: int = 10) -> List[User]:
 
         statement = select(User).offset(skip).limit(limit)
         return list(self.session.execute(statement).scalars().all())

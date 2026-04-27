@@ -127,12 +127,12 @@ class BankService:
 
         return bank
 
-    def get_banks_by_month_and_amount(self, term_month: int, amount: float = 0, page: int = 1, size: int = 10) -> List[BankRateResponse]:
+    def get_banks_by_month_and_amount(self, term_month: int, amount: float = 0, type: str = None,  page: int = 1, size: int = 10) -> List[BankRateResponse]:
         if page < 1:
             page = 1
         skip = (page - 1) * size
 
-        rows = self.__bankRepository.get_bank_rates(term_month, amount, skip, size)
+        rows = self.__bankRepository.get_bank_rates(term_month, amount,type, skip, size)
 
         print("ROWS:", rows)
 
