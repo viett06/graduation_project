@@ -1,0 +1,36 @@
+services:
+  postgresql:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - my-internal-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_cache
+    restart: unless-stopped
+    ports:
+      - 6380:6379
+    volumes:
+      - redis_data:/data
+    networks:
+      - my-internal-net
+
+volumes:
+  postgres_data:
+    name: postgres_data
+
+networks:
+  my-internal-net:
+#    external: true
+     driver: bridge

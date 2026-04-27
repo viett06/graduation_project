@@ -1,0 +1,1 @@
+- run docker_compose: docker-compose up -d
