@@ -8,8 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-
+from app.core.redis.redis_config import redis_client
 from app.db.session import SessionLocal
 from app.models.rate_limit import RateLimit
 
@@ -151,7 +150,7 @@ async def _consume_sliding_window(redis, key: str, max_requests: int, window_tim
 
 async def _is_rate_limited(capacity: float, refill_rate: float, max_request: int,max_limit: int, window_time: int, request: Request, config: dict | None) -> bool:
 
-    redis = request.app.state.redis
+    redis = redis_client
 
     # rateLimited = await _get_rate_limit_config(str(request.url.path), session)
     key = await _build_key(request, config)
@@ -166,7 +165,7 @@ async def _is_rate_limited(capacity: float, refill_rate: float, max_request: int
 async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
     method = request.method
-    redis = request.app.state.redis
+    redis = redis_client
     limited = False
 
     session = SessionLocal()
