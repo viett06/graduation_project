@@ -29,34 +29,93 @@ class BankCrawler(BaseCrawler):
             }
         }
 
+    # def parse_rates(self, html: str) -> List[dict]:
+    #     soup = BeautifulSoup(html, "html.parser")
+    #     rates = []
+    #
+    #     table = soup.find("table")
+    #     if not table:
+    #         return rates
+    #
+    #     rows = table.find_all("tr")[1:]
+    #
+    #     for row in rows:
+    #         cols = row.find_all("td")
+    #
+    #         if len(cols) < 2:
+    #             continue
+    #
+    #         term_text = cols[0].get_text(" ", strip=True)
+    #
+    #         code = cols[1].get("nb", "")
+    #         decoded = self.decode_nb(code)
+    #
+    #         rate = self.extract_rate(decoded)
+    #         term = self.term_to_month(term_text)
+    #
+    #         if term is not None and 0 < rate < 20:
+    #             rates.append({
+    #                 "term_month": term,
+    #                 "rate": rate,
+    #                 "min_amount": 0,
+    #                 "max_amount": None,
+    #                 "note": term_text,
+    #                 "effective_date": date.today()
+    #             })
+    #
+    #     return rates
+
     def parse_rates(self, html: str) -> List[dict]:
         soup = BeautifulSoup(html, "html.parser")
         rates = []
 
-        table = soup.find("table")
-        if not table:
-            return rates
+        tables = soup.find_all("table")
 
-        rows = table.find_all("tr")[1:]
+        for table in tables:
 
-        for row in rows:
-            cols = row.find_all("td")
+            title_tag = table.find_previous(["h2", "h3"])
 
-            if len(cols) < 2:
+            if not title_tag:
                 continue
 
-            term_text = cols[0].get_text(" ", strip=True)
+            title = title_tag.get_text().lower()
 
-            code = cols[1].get("nb", "")
-            decoded = self.decode_nb(code)
+            if "quầy" in title:
+                channel = "COUNTER"
+            elif "online" in title:
+                channel = "ONLINE"
+            else:
+                continue
 
-            rate = self.extract_rate(decoded)
-            term = self.term_to_month(term_text)
+            rows = table.find_all("tr")
 
-            if term is not None and 0 < rate < 20:
+            for row in rows:
+                cols = row.find_all("td")
+
+                if len(cols) < 2:
+                    continue
+
+                term_text = cols[0].get_text(" ", strip=True)
+
+                if "ngày" in term_text.lower():
+                    continue
+
+                code = cols[1].get("nb", "")
+                decoded = self.decode_nb(code)
+                rate = self.extract_rate(decoded)
+
+                term = self.term_to_month(term_text)
+
+                if term is None or rate == 0:
+                    continue
+
+                if not (0 < rate < 20):
+                    continue
+
                 rates.append({
                     "term_month": term,
                     "rate": rate,
+                    "channel": channel,
                     "min_amount": 0,
                     "max_amount": None,
                     "note": term_text,

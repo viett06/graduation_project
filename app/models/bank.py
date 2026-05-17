@@ -10,7 +10,7 @@ class Bank(Base):
 
     name = Column(String, nullable=False, unique=True)
     code = Column(String, nullable=False, unique=True)
-    type = Column(String, nullable=False, unique=True)
+    type = Column(String, nullable=False)
     logo_url = Column(String)
     website_url = Column(String)
     rate_source = Column(String)

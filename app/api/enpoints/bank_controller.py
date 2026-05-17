@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, logger
 from typing import List, Dict, Optional
 from app.api.deps import get_db
 from app.repository.bank_repository import BankRepository
-from app.schemas.bankSchema import BankResponse, UpdateBank, BankCreate, UpdateBank, BankRateResponse, InterestCalculateRequest, InterestCalculateResponse
+from app.schemas.bankSchema import BankResponse, UpdateBank, BankCreate, UpdateBank, BankRateResponse, InterestCalculateRequest, InterestCalculateResponse, CompareCalculateRequest, CompareCalculateResponse
 from sqlalchemy.orm import Session, session
 from app.service.bankService import BankService
 from app.schemas.bankSchema import BankCreate
@@ -81,6 +81,18 @@ async def calculate_interest(
     service = BankService(session)
     try:
         return service.calculate_interest(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/compare-calculate", response_model=CompareCalculateResponse)
+async def calculate_interest(
+    data: CompareCalculateRequest,
+    session: Session = Depends(get_db)
+):
+
+    service = BankService(session)
+    try:
+        return service.compare_calculate_interest(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

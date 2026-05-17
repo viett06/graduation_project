@@ -20,7 +20,7 @@ async def crawl_job():
         service = CrawlerService(db)
         logger.info("[Scheduler] Initiating automated crawl cycle for all banks...")
 
-        results = await service.crawl_all_banks(admin_id=1)
+        results = await service.crawl_all_banks(admin_id=6)
 
         success_count = sum(1 for status in results.values() if status.get("status") == "success")
         fail_count = len(results) - success_count
@@ -43,7 +43,7 @@ def start_scheduler():
     """
     scheduler.add_job(
         crawl_job,
-        IntervalTrigger(minutes=1),
+        IntervalTrigger(minutes=60),
         id="crawl_every_60_minutes",
         replace_existing=True,
         max_instances=1,

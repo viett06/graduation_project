@@ -22,6 +22,7 @@ class User(Base):
     chats_receiver = relationship("Chat", back_populates="receiver",foreign_keys="[Chat.receiver_id]", cascade="all, delete-orphan",  passive_deletes=True)
     audit_logs = relationship("AuditLog", back_populates="user")
     interest_rates = relationship("InterestRate", back_populates="user")
+    saving_plans = relationship("SavingPlans", back_populates="user")
 
 
 

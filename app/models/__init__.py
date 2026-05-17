@@ -10,3 +10,4 @@ from app.models.interestRate import InterestRate
 from app.models.auditLog import AuditLog
 from app.models.rate_limit import RateLimit
 from app.models.crawlerLog import CrawlerLog
+from app.models.saving_plans import SavingPlans

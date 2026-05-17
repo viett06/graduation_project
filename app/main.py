@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 
+from app.agent import chatbot_router
 from app.api.deps import get_db
 from app.core.security.seeder import seed_rbac
 from app.api.enpoints import auth_controller, user_controller, bank_controller, rate_controller, auditLog_controller, crawler
@@ -69,7 +70,12 @@ app.include_router(bank_controller.router, prefix=f"{settings.API_V1_STR}/banks"
 app.include_router(rate_controller.router, prefix=f"{settings.API_V1_STR}/rates", tags=["Rates"])
 app.include_router(auditLog_controller.router, prefix=f"{settings.API_V1_STR}/audit-logs", tags=["Audits"])
 
+app.include_router(chatbot_router.router, prefix=f"{settings.API_V1_STR}/chatbot", tags=["Chatbot"])
 app.include_router(crawler.router,prefix=f"{settings.API_V1_STR}/crawler", tags=["Crawler"])
+
+app.include_router(crawler.router,prefix=f"{settings.API_V1_STR}/saving-plan", tags=["Saving Plan"])
+
+
 
 # --- WebSockets ---
 @app.websocket("/ws/rates")

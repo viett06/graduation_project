@@ -82,6 +82,7 @@ class BankRepository:
                             b.logo_url,
                             b.type,
                             ir.rate,
+                            ir.channel,
                             ir.updated_at,
                             b.rate_source
                      FROM banks AS b
@@ -135,7 +136,7 @@ class BankRepository:
             joinedload(Bank.interest_rates)
         ).filter(Bank.id == bank_id, Bank.status == True).first()
 
-    def get_applied_rate(self, bank_id: int, term_month: int, amount: float, deposit_date: date):
+    def get_applied_rate(self, bank_id: int, term_month: int, amount: float, deposit_date: date, channel: str):
 
         query = text("""
                      SELECT rate
@@ -143,6 +144,7 @@ class BankRepository:
                      WHERE 1 = 1
                        AND  bank_id = :bank_id
                        AND term_month = :term_month
+                       AND channel = :channel
                        AND min_amount <= :amount
                        AND (max_amount > :amount OR max_amount IS NULL)
                        AND effective_date <= :deposit_date
@@ -153,7 +155,8 @@ class BankRepository:
             "bank_id": bank_id,
             "term_month": term_month,
             "amount": amount,
-            "deposit_date": deposit_date
+            "deposit_date": deposit_date,
+            "channel": channel
         }).fetchone()
 
         return result[0] if result else None
@@ -164,4 +167,59 @@ class BankRepository:
         query = text("SELECT DISTINCT term_month FROM interest_rates WHERE bank_id = :bank_id ORDER BY term_month")
         result = self.session.execute(query, {"bank_id": bank_id}).fetchall()
         return [row[0] for row in result]
+
+    async def get_all_banks_and_rates_for_chat_bot(self, name: str | None, type: str | None, code: str | None):
+
+        search_name = f"%{name.strip()}%" if name else None
+        search_type = f"%{type.strip().upper()}%" if type else None
+        search_code = code.strip().upper() if code else None
+
+        query = text("""
+                                 SELECT b.name,
+                   UPPER(b.code) as code,
+                   UPPER(b.type) as type,
+                   ir.rate,
+                   ir.term_month
+            FROM banks as b
+            LEFT JOIN interest_rates AS ir ON b.id = ir.bank_id
+            WHERE ir.rate IS NOT NULL
+                  AND (
+                        (:code IS NOT NULL AND UPPER(b.code) = :code)
+                     OR (:code IS NULL AND (:name IS NULL OR b.name ILIKE :name))
+                     )
+                  AND (:type IS NULL OR UPPER(b.type) LIKE :type)
+            ORDER BY ir.rate DESC
+                     """)
+
+        result = self.session.execute(query, {
+            "name": search_name,
+            "type": search_type,
+            "code": search_code
+        }).fetchall()
+
+        return result
+    
+    async def get_all_banks_and_rates_follow_duration_month(self, term_month: int, codes: list[str] | None):
+        query = text(
+            """
+                SELECT 
+                b.bank_id,
+                b.name,
+                ir.term_month,
+                ir.rate
+            FROM banks AS b
+            LEFT JOIN interest_rates AS ir 
+                ON b.id = ir.bank_id
+            WHERE b.status = TRUE
+            AND ir.term_month <= :term_month
+            AND (:codes IS NULL OR b.code IN :codes)
+            ORDER BY ir.rate DESC
+            """
+        )
+        result = self.session.execute(query,{
+            "term_month": term_month,
+            "codes": list(codes) if codes else None
+        }).fetchall()
+
+        return result
 

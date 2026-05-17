@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from app.schemas.bankSchema import BankCreate, UpdateBank, BankRateResponse, InterestRateResponse, \
-    InterestCalculateRequest, InterestCalculateResponse
+    InterestCalculateRequest, InterestCalculateResponse, AllBanksOfChatBot, CompareCalculateRequest, CompareCalculateResponse
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
 from typing import Optional, List
@@ -46,6 +46,23 @@ class BankService:
         skip = (page - 1) * size
 
         return self.__bankRepository.get_all_banks(skip=skip, limit=size)
+
+    async def get_all_banks_and_rates_for_chat_bot(self, name: str | None, type: str | None, code: str | None):
+
+        banks = await self.__bankRepository.get_all_banks_and_rates_for_chat_bot(name, type, code)
+
+        list_of_banks = []
+
+        for bank in banks:
+            bank_data = AllBanksOfChatBot(
+                code=bank.code,
+                type=bank.type,
+                rate=bank.rate,
+                term_month=bank.term_month
+            )
+            list_of_banks.append(bank_data.model_dump())
+
+        return list_of_banks
 
     def delete_bank_and_save_audit_log(self, admin_id:int, bank_id: int):
 
@@ -147,6 +164,7 @@ class BankService:
                     bank = row.name,
                     logo_url=row.logo_url,
                     type=row.type,
+                    channel=row.channel,
                     rate=float(row.rate) if row.rate else None,
                     updated_at=row.updated_at,
                     rate_source=row.rate_source
@@ -182,12 +200,12 @@ class BankService:
         if not bank:
             raise ValueError("The bank does not exist or has been hidden.")
 
-
         rate = self.__bankRepository.get_applied_rate(
             calc_data.bank_id,
             calc_data.term_month,
             calc_data.amount,
-            calc_data.deposit_date
+            calc_data.deposit_date,
+            calc_data.channel
         )
 
         if rate is None:
@@ -204,6 +222,7 @@ class BankService:
         return InterestCalculateResponse(
             bank_name=bank.name,
             interest_rate=rate,
+            channel = calc_data.channel,
             term_month=calc_data.term_month,
             deposit_date=calc_data.deposit_date,
             maturity_date=maturity_date,
@@ -214,6 +233,38 @@ class BankService:
 
     # def get_bank_terms(self, bank_id: int) -> List[int]:
     #     return self.__bankRepository.get_available_terms(bank_id)
+
+    def compare_calculate_interest(self, calc_data: CompareCalculateRequest) -> CompareCalculateResponse:
+        bank = self.__bankRepository.get_bank_by_id(calc_data.bank_id)
+        if not bank:
+            raise ValueError("The bank does not exist or has been hidden.")
+        rate = self.__bankRepository.get_applied_rate(
+            calc_data.bank_id,
+            calc_data.term_month,
+            calc_data.amount,
+            calc_data.deposit_date,
+            calc_data.channel
+        )
+
+        maturity_date = self.calculate_maturity_date(calc_data.deposit_date, calc_data.term_month)
+        total_days = (maturity_date - calc_data.deposit_date).days
+
+        interest_amount = calc_data.amount * (float(rate) / 100) * (total_days / 365)
+
+        total_amount = round(calc_data.amount + interest_amount, 2)
+
+        return CompareCalculateResponse(
+            bank_name=bank.name,
+            interest_rate=rate,
+            channel=calc_data.channel,
+            term_month=calc_data.term_month,
+            deposit_date=calc_data.deposit_date,
+            maturity_date=maturity_date,
+            total_days=total_days,
+            interest_amount=round(interest_amount, 2),
+            total_amount=total_amount,
+            compare_result= total_amount - calc_data.previous_result,
+        )
 
 
 

@@ -9,6 +9,7 @@ class InterestRateBase(BaseModel):
     max_amount: Optional[int] = None
     term_month: int
     rate: Decimal
+    channel: str
     effective_date: datetime
     is_current: bool = False
     note: Optional[str] = None
@@ -29,6 +30,7 @@ class InterestRateUpdate(BaseModel):
     max_amount: Optional[int] = None
     term_month: Optional[int] = None
     rate: Optional[Decimal] = None
+    channel: str
     effective_date: Optional[datetime] = None
     is_current: Optional[bool] = None
     note: Optional[str] = None

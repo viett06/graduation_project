@@ -17,4 +17,8 @@ beautifulsoup4
 lxml
 apscheduler>=3.10.4
 requests
-httpx
+httpx>=0.27.0
+openai>=1.0.0
+python-dotenv==1.0.1
+groq
+numpy==2.4.4

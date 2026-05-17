@@ -1,5 +1,6 @@
+from datetime import date
 from distutils.util import execute
-from typing import Optional, List
+from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from app.models.interestRate import InterestRate
 from app.models.bank import Bank
@@ -77,4 +78,36 @@ class InterestRateRepository:
     def find_interest_rate_by_id(self, rate_id: int) -> Optional[InterestRate]:
         stmt = select(InterestRate).where(InterestRate.id == rate_id)
         return self.__session.execute(stmt).scalar_one_or_none()
+
+    def get_best_rates(self, term_months: int, prefer_online: bool = True, as_of_date: date = None) -> Dict:
+        """Trả về lãi suất tốt nhất cho kỳ hạn term_months (đơn vị %/năm)"""
+        if as_of_date is None:
+            as_of_date = date.today()
+
+        query = self.db.query(InterestRate).filter(
+            InterestRate.term_month == term_months,
+            InterestRate.effective_date <= as_of_date,
+            InterestRate.is_current == True
+        )
+        if prefer_online:
+            query = query.filter(InterestRate.channel == "online")
+        else:
+            query = query.filter(InterestRate.channel == "counter")
+
+        best = query.order_by(InterestRate.rate.desc()).first()
+        if best:
+            return {"rate": float(best.rate), "bank_id": best.bank_id, "channel": best.channel}
+
+        # fallback: lấy bất kỳ kênh nào
+        best = self.db.query(InterestRate).filter(
+            InterestRate.term_month == term_months,
+            InterestRate.effective_date <= as_of_date,
+            InterestRate.is_current == True
+        ).order_by(InterestRate.rate.desc()).first()
+        if best:
+            return {"rate": float(best.rate), "bank_id": best.bank_id, "channel": best.channel}
+
+        return {"rate": 0.0, "bank_id": None, "channel": None}
+
+
 

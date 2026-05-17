@@ -14,6 +14,7 @@ class InterestRate(Base):
     effective_date = Column(DateTime, nullable=False)
     is_current = Column(Boolean, nullable=False)
     note = Column(Text)
+    channel = Column(String(length=50), nullable=False)
     create_by = Column(Integer, ForeignKey("users.id",ondelete="SET NULL"), nullable=True)
     bank_id = Column(Integer, ForeignKey("banks.id",ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
