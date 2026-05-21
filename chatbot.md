@@ -1,6 +1,6 @@
 # Chatbot System
 
-Tài liệu này mô tả ngắn gọn cách chatbot hoạt động trong hệ thống. Nội dung tập trung vào luồng sử dụng và cách xử lý tổng quan, không đi quá sâu vào chi tiết triển khai.
+Tài liệu này mô tả ngắn gọn cách chatbot hoạt động trong hệ thống.
 
 ## Chatbot dùng để làm gì?
 
