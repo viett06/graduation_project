@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 from app.agent import chatbot_router
 from app.api.deps import get_db
 from app.core.security.seeder import seed_rbac
-from app.api.enpoints import auth_controller, user_controller, bank_controller, rate_controller, auditLog_controller, crawler
+from app.api.enpoints import auth_controller, user_controller, bank_controller, rate_controller, auditLog_controller, \
+    crawler, saving_plan_controller
 from app.core.config import settings
 from app.core.middleware.ratelimiter import rate_limit_middleware
 from app.core.socket.websocket import manager
@@ -73,7 +74,7 @@ app.include_router(auditLog_controller.router, prefix=f"{settings.API_V1_STR}/au
 app.include_router(chatbot_router.router, prefix=f"{settings.API_V1_STR}/chatbot", tags=["Chatbot"])
 app.include_router(crawler.router,prefix=f"{settings.API_V1_STR}/crawler", tags=["Crawler"])
 
-app.include_router(crawler.router,prefix=f"{settings.API_V1_STR}/saving-plan", tags=["Saving Plan"])
+app.include_router(saving_plan_controller.router,prefix=f"{settings.API_V1_STR}/saving-plan", tags=["Saving Plan"])
 
 
 
