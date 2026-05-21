@@ -4,7 +4,7 @@ from app.schemas.bankSchema import BankCreate, UpdateBank, BankRateResponse, Int
     InterestCalculateRequest, InterestCalculateResponse, AllBanksOfChatBot, CompareCalculateRequest, CompareCalculateResponse
 from sqlalchemy.orm import Session
 from app.models.bank import Bank
-from typing import Optional, List
+from typing import Any, Optional, List
 from app.repository.bank_repository import BankRepository
 from app.service.auditLogService import AuditLogService
 from app.enums.auditActionType import AuditActionType
@@ -266,6 +266,148 @@ class BankService:
             compare_result= total_amount - calc_data.previous_result,
         )
 
+    @staticmethod
+    def _chatbot_rate_row(row) -> dict[str, Any]:
+        data = dict(row)
+        if data.get("rate") is not None:
+            data["rate"] = float(data["rate"])
+        return data
+
+    def resolve_banks_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            names: list[str] | None = None,
+            limit: int = 10
+    ) -> list[dict[str, Any]]:
+        rows = self.__bankRepository.find_banks_for_chatbot(codes=codes, names=names, limit=limit)
+        return [dict(row) for row in rows]
+
+    def get_rates_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            names: list[str] | None = None,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 20
+    ) -> list[dict[str, Any]]:
+        rows = self.__bankRepository.get_interest_rates_for_chatbot(
+            codes=codes,
+            names=names,
+            term_month=term_month,
+            channel=channel,
+            amount=amount,
+            limit=limit,
+        )
+        return [self._chatbot_rate_row(row) for row in rows]
+
+    def get_top_rates_for_chatbot(
+            self,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 10
+    ) -> list[dict[str, Any]]:
+        rows = self.__bankRepository.get_top_interest_rates_for_chatbot(
+            term_month=term_month,
+            channel=channel,
+            amount=amount,
+            limit=limit,
+        )
+        return [self._chatbot_rate_row(row) for row in rows]
+
+    def compare_interest_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            names: list[str] | None = None,
+            term_month: int | None = None,
+            amount: float | None = None,
+            channel: str = "ONLINE",
+            deposit_date: date | None = None
+    ) -> dict[str, Any]:
+        banks = self.resolve_banks_for_chatbot(codes=codes, names=names, limit=2)
+
+        if len(banks) < 2:
+            return {
+                "error": "Cần tìm được ít nhất 2 ngân hàng để so sánh.",
+                "matched_banks": banks,
+            }
+
+        missing_fields = []
+        if term_month is None:
+            missing_fields.append("term_month")
+        if amount is None:
+            missing_fields.append("amount")
+
+        rate_rows = self.get_rates_for_chatbot(
+            codes=[bank["code"] for bank in banks],
+            term_month=term_month,
+            channel=channel,
+            amount=amount,
+            limit=10,
+        )
+
+        if missing_fields:
+            return {
+                "missing_fields": missing_fields,
+                "matched_banks": banks,
+                "rates": rate_rows,
+                "message": "Cần bổ sung số tiền gửi và kỳ hạn để tính tiền lãi.",
+            }
+
+        deposit_date_value = deposit_date or date.today()
+        results = []
+
+        for bank in banks:
+            try:
+                calc_request = InterestCalculateRequest(
+                    bank_id=bank["id"],
+                    channel=channel,
+                    term_month=term_month,
+                    amount=amount,
+                    deposit_date=deposit_date_value,
+                )
+                results.append(self.calculate_interest(calc_request).model_dump())
+            except Exception as e:
+                results.append({
+                    "bank_name": bank["name"],
+                    "code": bank["code"],
+                    "error": str(e),
+                })
+
+        valid_results = [item for item in results if not item.get("error")]
+        if len(valid_results) < 2:
+            return {
+                "matched_banks": banks,
+                "rates": rate_rows,
+                "calculations": results,
+                "error": "Không đủ dữ liệu lãi suất phù hợp để tính tiền lãi cho cả hai ngân hàng.",
+            }
+
+        first_total = valid_results[0]["total_amount"]
+        comparisons = []
+        for item in valid_results[1:]:
+            comparisons.append({
+                "bank_name": item["bank_name"],
+                "compare_result": item["total_amount"] - first_total,
+            })
+
+        best = max(valid_results, key=lambda item: item["total_amount"])
+        worst = min(valid_results, key=lambda item: item["total_amount"])
+
+        return {
+            "matched_banks": banks,
+            "rates": rate_rows,
+            "calculations": valid_results,
+            "comparisons": comparisons,
+            "better_bank": best["bank_name"],
+            "difference_total_amount": round(best["total_amount"] - worst["total_amount"], 2),
+            "difference_interest_amount": round(best["interest_amount"] - worst["interest_amount"], 2),
+            "amount": amount,
+            "term_month": term_month,
+            "channel": channel,
+            "deposit_date": deposit_date_value,
+        }
 
 
 

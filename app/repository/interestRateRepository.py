@@ -4,6 +4,7 @@ from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from app.models.interestRate import InterestRate
 from app.models.bank import Bank
+from sqlalchemy import bindparam, text
 from sqlalchemy.sql import exists, select
 from app.schemas.interestRateSchema import InterestRateBase, InterestRateCreate
 
@@ -109,5 +110,76 @@ class InterestRateRepository:
 
         return {"rate": 0.0, "bank_id": None, "channel": None}
 
+    def get_available_terms_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            channel: str | None = None
+    ):
+        query_text = """
+            SELECT DISTINCT UPPER(b.code) AS code,
+                            b.name AS bank_name,
+                            ir.term_month,
+                            UPPER(ir.channel) AS channel
+            FROM interest_rates AS ir
+            JOIN banks AS b ON b.id = ir.bank_id
+            WHERE b.status = TRUE
+              AND ir.rate IS NOT NULL
+              AND (:channel IS NULL OR UPPER(ir.channel) = UPPER(:channel))
+              AND (:has_codes = FALSE OR UPPER(b.code) IN :codes)
+            ORDER BY UPPER(b.code), ir.term_month
+        """
+
+        normalized_codes = [code.strip().upper() for code in (codes or []) if code]
+        query = text(query_text).bindparams(bindparam("codes", expanding=True))
+        return self.__session.execute(
+            query,
+            {
+                "channel": channel,
+                "has_codes": len(normalized_codes) > 0,
+                "codes": normalized_codes or ["__NO_CODE__"],
+            }
+        ).mappings().all()
+
+    def get_top_rates_for_chatbot(
+            self,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 10
+    ):
+        query = text("""
+            SELECT b.id AS bank_id,
+                   b.name AS bank_name,
+                   UPPER(b.code) AS code,
+                   UPPER(b.type) AS type,
+                   ir.rate,
+                   ir.term_month,
+                   UPPER(ir.channel) AS channel,
+                   ir.min_amount,
+                   ir.max_amount,
+                   ir.effective_date,
+                   ir.updated_at
+            FROM interest_rates AS ir
+            JOIN banks AS b ON b.id = ir.bank_id
+            WHERE b.status = TRUE
+              AND ir.rate IS NOT NULL
+              AND (:term_month IS NULL OR ir.term_month = :term_month)
+              AND (:channel IS NULL OR UPPER(ir.channel) = UPPER(:channel))
+              AND (:amount IS NULL OR (
+                    ir.min_amount <= :amount
+                    AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
+              ))
+            ORDER BY ir.rate DESC, b.name ASC
+            LIMIT :limit
+        """)
+        return self.__session.execute(
+            query,
+            {
+                "term_month": term_month,
+                "channel": channel,
+                "amount": amount,
+                "limit": limit,
+            }
+        ).mappings().all()
 
 

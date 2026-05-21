@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Optional, List
-from sqlalchemy import select, desc, exists, text
+from sqlalchemy import select, desc, exists, text, bindparam
 from sqlalchemy.orm import Session, joinedload
 from app.models.bank import Bank
 
@@ -198,28 +198,151 @@ class BankRepository:
         }).fetchall()
 
         return result
-    
-    async def get_all_banks_and_rates_follow_duration_month(self, term_month: int, codes: list[str] | None):
-        query = text(
-            """
-                SELECT 
-                b.bank_id,
-                b.name,
-                ir.term_month,
-                ir.rate
-            FROM banks AS b
-            LEFT JOIN interest_rates AS ir 
-                ON b.id = ir.bank_id
-            WHERE b.status = TRUE
-            AND ir.term_month <= :term_month
-            AND (:codes IS NULL OR b.code IN :codes)
-            ORDER BY ir.rate DESC
-            """
-        )
-        result = self.session.execute(query,{
-            "term_month": term_month,
-            "codes": list(codes) if codes else None
-        }).fetchall()
 
+    def get_all_banks_and_rates_follow_duration_month(
+            self,
+            term_month: int,
+            codes: list[str] | None,
+            channel: str = "ONLINE"
+    ):
+        query_text = """
+                     SELECT b.id, \
+                            b.code, \
+                            b.name, \
+                            ir.term_month, \
+                            ir.rate
+                     FROM banks AS b
+                              LEFT JOIN interest_rates AS ir
+                                        ON b.id = ir.bank_id
+                     WHERE b.status = TRUE
+                       AND ir.rate IS NOT NULL
+                       AND ir.term_month <= :term_month
+                       AND UPPER(ir.channel) = UPPER(:channel) {code_filter}
+                     ORDER BY ir.rate DESC \
+                     """
+
+        params = {
+            "term_month": term_month,
+            "channel": channel
+        }
+
+        if codes:
+            query = text(
+                query_text.format(code_filter="AND b.code IN :codes")
+            ).bindparams(bindparam("codes", expanding=True))
+
+            params["codes"] = list(codes)
+        else:
+            query = text(query_text.format(code_filter=""))
+
+        result = self.session.execute(query, params).fetchall()
         return result
 
+    def find_banks_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            names: list[str] | None = None,
+            limit: int = 10
+    ):
+        query_text = """
+            SELECT id, name, UPPER(code) AS code, UPPER(type) AS type
+            FROM banks
+            WHERE status = TRUE
+              AND (
+                    (:has_codes = FALSE AND :has_names = FALSE)
+                 OR (:has_codes = TRUE AND UPPER(code) IN :codes)
+                 OR (:has_names = TRUE AND name ILIKE ANY(:names))
+              )
+            ORDER BY name ASC
+            LIMIT :limit
+        """
+
+        normalized_codes = [code.strip().upper() for code in (codes or []) if code]
+        normalized_names = [f"%{name.strip()}%" for name in (names or []) if name]
+
+        query = text(query_text).bindparams(bindparam("codes", expanding=True))
+        return self.session.execute(
+            query,
+            {
+                "has_codes": len(normalized_codes) > 0,
+                "has_names": len(normalized_names) > 0,
+                "codes": normalized_codes or ["__NO_CODE__"],
+                "names": normalized_names or ["__NO_NAME__"],
+                "limit": limit,
+            }
+        ).mappings().all()
+
+    def get_interest_rates_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            names: list[str] | None = None,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 20
+    ):
+        query_text = """
+            SELECT b.id AS bank_id,
+                   b.name AS bank_name,
+                   UPPER(b.code) AS code,
+                   UPPER(b.type) AS type,
+                   ir.rate,
+                   ir.term_month,
+                   UPPER(ir.channel) AS channel,
+                   ir.min_amount,
+                   ir.max_amount,
+                   ir.effective_date,
+                   ir.updated_at,
+                   b.rate_source
+            FROM banks AS b
+            JOIN interest_rates AS ir ON b.id = ir.bank_id
+            WHERE b.status = TRUE
+              AND ir.rate IS NOT NULL
+              AND (:term_month IS NULL OR ir.term_month = :term_month)
+              AND (:channel IS NULL OR UPPER(ir.channel) = UPPER(:channel))
+              AND (:amount IS NULL OR (
+                    ir.min_amount <= :amount
+                    AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
+              ))
+              AND (
+                    (:has_codes = FALSE AND :has_names = FALSE)
+                 OR (:has_codes = TRUE AND UPPER(b.code) IN :codes)
+                 OR (:has_names = TRUE AND b.name ILIKE ANY(:names))
+              )
+            ORDER BY ir.rate DESC, b.name ASC, ir.term_month ASC
+            LIMIT :limit
+        """
+
+        normalized_codes = [code.strip().upper() for code in (codes or []) if code]
+        normalized_names = [f"%{name.strip()}%" for name in (names or []) if name]
+
+        query = text(query_text).bindparams(bindparam("codes", expanding=True))
+        return self.session.execute(
+            query,
+            {
+                "term_month": term_month,
+                "channel": channel,
+                "amount": amount,
+                "has_codes": len(normalized_codes) > 0,
+                "has_names": len(normalized_names) > 0,
+                "codes": normalized_codes or ["__NO_CODE__"],
+                "names": normalized_names or ["__NO_NAME__"],
+                "limit": limit,
+            }
+        ).mappings().all()
+
+    def get_top_interest_rates_for_chatbot(
+            self,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 10
+    ):
+        return self.get_interest_rates_for_chatbot(
+            codes=None,
+            names=None,
+            term_month=term_month,
+            channel=channel,
+            amount=amount,
+            limit=limit,
+        )

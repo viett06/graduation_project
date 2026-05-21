@@ -92,11 +92,11 @@ class AllBanksOfChatBot(BaseModel):
 
 
 class BankProfile:
-    """Thông tin một ngân hàng."""
     bank_id: str
+    code: str
     name: str
     rates: Dict[int, float]          # {term_months: annual_rate}
-    demand_rate: float = 0.005       # Lãi KKH (mặc định 0.5%/năm)
+    demand_rate: float = 0.0      # Lãi KKH (mặc định 0.5%/năm)
     transfer_fee_fixed: float = 0.0  # Phí chuyển khoản cố định (VNĐ)
     transfer_fee_pct: float = 0.0    # Phí chuyển khoản theo % số tiền
     transfer_delay_days: int = 0     # Số ngày tiền nằm chờ khi nhảy ngân hàng

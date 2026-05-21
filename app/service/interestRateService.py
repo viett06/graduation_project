@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, List
 
 from fastapi.encoders import jsonable_encoder
 
@@ -139,6 +139,38 @@ class InterestRateService:
 
         return interest_rate_db
 
+    @staticmethod
+    def _chatbot_rate_row(row) -> dict[str, Any]:
+        data = dict(row)
+        if data.get("rate") is not None:
+            data["rate"] = float(data["rate"])
+        return data
+
+    def get_available_terms_for_chatbot(
+            self,
+            codes: list[str] | None = None,
+            channel: str | None = None
+    ) -> list[dict[str, Any]]:
+        rows = self.__interestRateRepository.get_available_terms_for_chatbot(
+            codes=codes,
+            channel=channel,
+        )
+        return [dict(row) for row in rows]
+
+    def get_top_rates_for_chatbot(
+            self,
+            term_month: int | None = None,
+            channel: str | None = None,
+            amount: float | None = None,
+            limit: int = 10
+    ) -> list[dict[str, Any]]:
+        rows = self.__interestRateRepository.get_top_rates_for_chatbot(
+            term_month=term_month,
+            channel=channel,
+            amount=amount,
+            limit=limit,
+        )
+        return [self._chatbot_rate_row(row) for row in rows]
 
 
 
