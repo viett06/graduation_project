@@ -23,6 +23,5 @@ class User(Base):
     audit_logs = relationship("AuditLog", back_populates="user")
     interest_rates = relationship("InterestRate", back_populates="user")
     saving_plans = relationship("SavingPlans", back_populates="user")
-
-
+    chatbot_conversation = relationship("ChatbotConversation", back_populates="user", cascade="all, delete-orphan", passive_deletes=True, uselist=False)
 
