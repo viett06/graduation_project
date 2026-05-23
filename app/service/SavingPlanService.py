@@ -7,7 +7,7 @@ from app.service.algorithm.dp_algorithm import DPOptimizer, BankProfile as DPBan
 from app.service.algorithm.greedy_algorithm import GreedyAlgorithm
 from app.service.algorithm.monte_carlo import MonteCarloAlgorithm
 from app.service.algorithm.rule_based import RuleBasedAlgorithm
-from app.schemas.savingPlanSchema import SavingPlanCreate
+from app.schemas.savingPlanSchema import SavingPlanCreate, SavingPlanOptionSave
 from app.models.saving_plans import SavingPlans
 from app.repository.bank_repository import BankRepository
 
@@ -154,7 +154,7 @@ class SavingPlanService:
         return normalized
 
 
-    def create_plan(self, user_id: int, request: SavingPlanCreate) -> Dict[str, Any]:
+    def optimize_plan(self, request: SavingPlanCreate) -> Dict[str, Any]:
         # --- Chuẩn bị tham số cho thuật toán ---
         initial_amount = request.total_amount
         duration_months = request.duration_month
@@ -245,29 +245,13 @@ class SavingPlanService:
 
         result = self._normalize_algorithm_result(result, algo, initial_amount)
 
-        # --- Lưu kế hoạch vào database ---
-        plan = SavingPlans(
-            user_id=user_id,
-            name=request.name,
-            total_amount=initial_amount,
-            goal_amount=request.goal_amount,
-            duration_month=duration_months,
-            plan_data=result,
-            algorithm_used=result.get('algorithm', algo),
-            notes=request.notes,
-            is_active=True
-        )
-        self.db.add(plan)
-        self.db.commit()
-        self.db.refresh(plan)
-
         # --- Chuẩn bị response ---
         final_amount = result.get('final_amount', 0)
         is_goal_met = final_amount >= request.goal_amount
         achieved_interest = result.get('achieved_interest', final_amount - initial_amount)
 
         return {
-            "plan_id": plan.id,
+            "plan_id": None,
             "final_amount": final_amount,
             "achieved_interest": achieved_interest,
             "is_goal_met": is_goal_met,
@@ -276,3 +260,60 @@ class SavingPlanService:
             "algorithm_used": result.get('algorithm', algo),
             "probability_success": result.get('probability_success')
         }
+
+    def create_plan(self, user_id: int, request: SavingPlanCreate) -> Dict[str, Any]:
+        """
+        Backward-compatible wrapper: hiện tại chỉ optimize và không lưu DB.
+        API lưu DB nằm ở save_plan_option.
+        """
+        return self.optimize_plan(request)
+
+    def save_plan_option(self, user_id: int, request: SavingPlanOptionSave) -> SavingPlans:
+        plan_data = request.plan_data
+        plan = SavingPlans(
+            user_id=user_id,
+            name=request.name,
+            total_amount=request.total_amount,
+            goal_amount=request.goal_amount,
+            duration_month=request.duration_month,
+            plan_data=plan_data,
+            algorithm_used=request.algorithm_used,
+            notes=request.notes,
+            is_active=True
+        )
+        self.db.add(plan)
+        self.db.commit()
+        self.db.refresh(plan)
+        return plan
+
+    def get_active_plans(self, user_id: int) -> List[SavingPlans]:
+        return (
+            self.db.query(SavingPlans)
+            .filter(
+                SavingPlans.user_id == user_id,
+                SavingPlans.is_active == True,
+            )
+            .order_by(SavingPlans.created_at.desc())
+            .all()
+        )
+
+    def get_active_plan_detail(self, user_id: int, plan_id: int) -> SavingPlans | None:
+        return (
+            self.db.query(SavingPlans)
+            .filter(
+                SavingPlans.id == plan_id,
+                SavingPlans.user_id == user_id,
+                SavingPlans.is_active == True,
+            )
+            .first()
+        )
+
+    def soft_delete_plan(self, user_id: int, plan_id: int) -> SavingPlans | None:
+        plan = self.get_active_plan_detail(user_id, plan_id)
+        if not plan:
+            return None
+
+        plan.is_active = False
+        self.db.commit()
+        self.db.refresh(plan)
+        return plan

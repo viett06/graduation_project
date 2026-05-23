@@ -316,8 +316,13 @@ def format_saving_plan_answer(result: dict) -> str:
         return result["error"]
 
     goal_text = "đạt mục tiêu" if result.get("is_goal_met") else "chưa đạt mục tiêu"
+    plan_text = (
+        f"Kế hoạch #{result.get('plan_id')}"
+        if result.get("plan_id")
+        else "Phương án đề xuất"
+    )
     return (
-        f"Kế hoạch #{result.get('plan_id')} dùng thuật toán {result.get('algorithm_used')}. "
+        f"{plan_text} dùng thuật toán {result.get('algorithm_used')}. "
         f"Số tiền cuối kỳ dự kiến: {result.get('final_amount', 0):,.0f} VND, "
         f"lãi đạt được: {result.get('achieved_interest', 0):,.0f} VND, {goal_text}."
     )

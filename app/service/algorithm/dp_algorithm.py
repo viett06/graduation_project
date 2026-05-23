@@ -119,30 +119,68 @@ def _allocations(
     allocation_step: float = DEFAULT_ALLOCATION_STEP,
     exact: bool = False,
 ) -> List[Tuple[float, ...]]:
+    # if n == 1:
+    #     return [(cash,)] if cash >= min_deposit else []
+    #
+    # if not exact:
+    #     results: List[Tuple[float, ...]] = []
+    #     if n == 2:
+    #         for f in (0.25, 0.5, 0.75):
+    #             a = _r(cash * f)
+    #             b = _r(cash - a)
+    #             if a >= min_deposit and b >= min_deposit:
+    #                 results.append((a, b))
+    #     elif n == 3:
+    #         splits = {
+    #             (1 / 3, 1 / 3, 1 / 3),
+    #             (0.25, 0.25, 0.5),
+    #             (0.25, 0.5, 0.25),
+    #             (0.5, 0.25, 0.25),
+    #         }
+    #         for f1, f2, _ in splits:
+    #             a = _r(cash * f1)
+    #             b = _r(cash * f2)
+    #             c = _r(cash - a - b)
+    #             if a >= min_deposit and b >= min_deposit and c >= min_deposit:
+    #                 results.append((a, b, c))
+    #     return list(dict.fromkeys(results))
+
     if n == 1:
         return [(cash,)] if cash >= min_deposit else []
 
     if not exact:
         results: List[Tuple[float, ...]] = []
+
         if n == 2:
-            for f in (0.25, 0.5, 0.75):
+            ratios = [0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9]
+
+            for f in ratios:
                 a = _r(cash * f)
                 b = _r(cash - a)
                 if a >= min_deposit and b >= min_deposit:
                     results.append((a, b))
+
         elif n == 3:
-            splits = {
-                (1 / 3, 1 / 3, 1 / 3),
+            ratio_patterns = [
+                (0.1, 0.2, 0.7),
+                (0.1, 0.3, 0.6),
+                (0.1, 0.4, 0.5),
+                (0.2, 0.2, 0.6),
+                (0.2, 0.3, 0.5),
+                (0.2, 0.4, 0.4),
                 (0.25, 0.25, 0.5),
-                (0.25, 0.5, 0.25),
-                (0.5, 0.25, 0.25),
-            }
-            for f1, f2, _ in splits:
-                a = _r(cash * f1)
-                b = _r(cash * f2)
-                c = _r(cash - a - b)
-                if a >= min_deposit and b >= min_deposit and c >= min_deposit:
-                    results.append((a, b, c))
+                (1 / 3, 1 / 3, 1 / 3),
+            ]
+
+            for pattern in ratio_patterns:
+                for f1, f2, f3 in set(itertools.permutations(pattern)):
+                    a = _r(cash * f1)
+                    b = _r(cash * f2)
+                    c = _r(cash - a - b)
+
+                    if a >= min_deposit and b >= min_deposit and c >= min_deposit:
+                        results.append((a, b, c))
+
         return list(dict.fromkeys(results))
 
     # Exact mode: chia theo bước allocation_step. Với step nhỏ như 1 triệu,
@@ -214,14 +252,72 @@ def _generate_multi_book_plans(
     #     options = options[:max_open_options]
 
     if not exact:
-        # ✅ Fix: sort theo lãi tuyệt đối trên toàn kỳ, không phải tích
+        # sort theo lãi tuyệt đối trên toàn kỳ, không phải tích
         # Đảm bảo kỳ hạn = duration luôn có mặt nếu tồn tại
         options.sort(key=lambda x: x[2], reverse=True)
 
-        # ✅ Đảm bảo luôn giữ lại option gửi toàn kỳ (term == months_remaining)
-        full_term_options = [o for o in options if o[1] == months_remaining]
-        other_options = [o for o in options if o[1] != months_remaining]
-        options = full_term_options + other_options[:max(0, max_open_options - len(full_term_options))]
+        # Đảm bảo luôn giữ lại option gửi toàn kỳ (term == months_remaining)
+        # full_term_options = [o for o in options if o[1] == months_remaining]
+        # other_options = [o for o in options if o[1] != months_remaining]
+        # options = full_term_options + other_options[:max(0, max_open_options - len(full_term_options))]
+
+        if not exact:
+            # - Giữ đa dạng kỳ hạn để tối ưu thanh khoản và tái đầu tư
+            full_term_options = [
+                o for o in options
+                if o[1] == months_remaining
+            ]
+
+            short_term_options = [
+                o for o in options
+                if o[1] <= max(1, months_remaining // 3)
+            ]
+
+            medium_term_options = [
+                o for o in options
+                if max(1, months_remaining // 3) < o[1] < months_remaining
+            ]
+
+            # Sort từng nhóm theo lãi suất giảm dần
+            full_term_options.sort(key=lambda x: x[2], reverse=True)
+            medium_term_options.sort(key=lambda x: x[2], reverse=True)
+            short_term_options.sort(key=lambda x: x[2], reverse=True)
+
+            selected = []
+
+            # Chia quota cho từng nhóm
+            full_quota = max(1, int(max_open_options * 0.4))
+            medium_quota = max(1, int(max_open_options * 0.4))
+            short_quota = max(1, max_open_options - full_quota - medium_quota)
+
+            selected.extend(full_term_options[:full_quota])
+            selected.extend(medium_term_options[:medium_quota])
+            selected.extend(short_term_options[:short_quota])
+
+            # Nếu chưa đủ max_open_options thì bù bằng các option tốt nhất còn lại
+            selected_keys = {
+                (bank.bank_id, term)
+                for bank, term, rate in selected
+            }
+
+            remaining_options = [
+                o for o in options
+                if (o[0].bank_id, o[1]) not in selected_keys
+            ]
+
+            remaining_options.sort(key=lambda x: x[2], reverse=True)
+
+            for o in remaining_options:
+                if len(selected) >= max_open_options:
+                    break
+                selected.append(o)
+
+            # Deduplicate lần cuối
+            dedup = {}
+            for bank, term, rate in selected:
+                dedup[(bank.bank_id, term)] = (bank, term, rate)
+
+            options = list(dedup.values())[:max_open_options]
 
     n_limit = slots if exact else min(slots, max_new_books_per_step)
     for n_new in range(1, n_limit + 1):
@@ -356,7 +452,7 @@ class DPOptimizer:
         banks: Optional[List[BankProfile]] = None,
         default_bank_id: str = "VCB",
         max_books_open: int = 3,
-        top_k_beam: int = 300,
+        top_k_beam: int = 1000,
         min_deposit: float = 1_000_000,
         top_n_results: int = 3,
         exact: bool = False,
@@ -376,7 +472,7 @@ class DPOptimizer:
         self.top_n = top_n_results
         self.exact = exact
         self.allocation_step = allocation_step
-        self.max_candidate_states = max_candidate_states or max(self.top_k * 20, self.top_k)
+        self.max_candidate_states = max_candidate_states or max(self.top_k * 10, self.top_k)
         self.max_open_options = max_open_options
         self.max_plans_per_state = max_plans_per_state
         self.max_new_books_per_step = max_new_books_per_step
@@ -457,6 +553,7 @@ class DPOptimizer:
 
         # for month in range(1, duration_months + 1):
         #     is_last = (month == duration_months)
+        # duyệt qua từng tháng
         for month in range(1, duration_months + 2):
             is_last = (month == duration_months + 1)
 
@@ -478,11 +575,16 @@ class DPOptimizer:
                     final_results.append((final_cash, final_interest, all_steps))
                 continue
 
-            extra    = extra_by_month.get(month, 0.0)
+            # khởi tạo không gian lưu trữ mới và thu thập tham số môi trường
+            # get số tiền gửi thêm của tháng hiện tại
+            extra = extra_by_month.get(month, 0.0)
+            # get số tiền rút ra có ở tháng này hay không
             withdraw = withdraw_by_month.get(month, 0.0)
             # months_remaining = duration_months - month
+            # số tháng khả dụng để mở sổ mới
             months_remaining = duration_months - month + 1
 
+            # key là tuple đại diện cho trạng thái tài chính mới, value là tổng lãi luỹ kế đạt được tính tới thời điểm này và danh sách các bước đã thực hiện để đạt được trạng thái đó.
             next_states: Dict[State, Tuple[float, List[Step]]] = {}
 
             # for (cash, books), (accrued_interest, steps) in states.items():
@@ -529,6 +631,8 @@ class DPOptimizer:
             #         return {"error": "Không tìm được kế hoạch khả thi. Kiểm tra lại lịch rút tiền."}
 
             for (cash, books), (accrued_interest, steps) in states.items():
+
+                # Xác định ngân hàng hiện tại từ sổ gần nhất đang mở.
                 current_bank_id = self._infer_current_bank(books)
 
                 # outcomes nhận danh sách các trạng thái mới từ hàm _expand
@@ -779,7 +883,7 @@ class DPOptimizer:
         return (_r(final_cash), open_steps)
 
     # Mở rộng trạng thái mỗi tháng
-
+    # sinh nhánh state mới từ state hiện tại bằng cách thực hiện các hành động: đáo hạn, gửi thêm, rút tiền, giữ cash, mở sổ mới.
     def _expand(
         self,
         month: int,
@@ -795,6 +899,7 @@ class DPOptimizer:
         delta_base = 0.0
 
         # 1. Sổ đáo hạn
+        # thu hoạch các sổ đáo hạn trong tháng này, cộng gốc + lãi vào cash và tính delta_interest
         live_books: List[Book] = []
         for b in books:
             if b.close_month == month:
@@ -1137,6 +1242,7 @@ class DPOptimizer:
         # Lấy lãi KKH cao nhất thị trường để tính cho phần tiền mặt còn thừa
         max_demand_rate = max(b.demand_rate for b in self.banks)
 
+        # hàm chấm điểm trạng thái để sắp xếp và chọn ra top_k trạng thái tốt nhất. Điểm số được tính dựa trên tổng giá trị dự kiến tại thời điểm kết thúc dự án (T) và giá trị đang có
         def evaluate_state(state_key: State, state_value: Tuple[float, List[Step]]) -> float:
             cash, books = state_key
             accrued_interest = state_value[0]
@@ -1148,11 +1254,13 @@ class DPOptimizer:
             # Đây là điểm mấu chốt để bảo vệ sổ 12T
             total_future_interest = sum(b.interest_full() for b in books)
 
+            book_principal = sum(b.principal for b in books)
+
             # 3. Tiền mặt (cash) hiện tại sẽ sinh lãi KKH cho đến hết kỳ hạn mục tiêu
             future_cash_growth = cash * (max_demand_rate * months_remaining / 12.0)
 
             # Tổng giá trị dự kiến tại thời điểm kết thúc dự án (T)
-            return current_net_worth + total_future_interest + future_cash_growth
+            return current_net_worth + total_future_interest + future_cash_growth + book_principal
 
         # Sắp xếp và giữ lại những trạng thái có "Giá trị cuối kỳ" cao nhất
         sorted_s = sorted(
