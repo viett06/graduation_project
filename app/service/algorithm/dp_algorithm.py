@@ -6,7 +6,7 @@ Cải tiến so với v2:
   - Mô hình phí chuyển khoản liên ngân hàng (fixed + % amount)
   - Thời gian trễ (delay days) khi nhảy ngân hàng → tiền nằm chờ mất lãi
   - Tự động xét chiến lược: 1 ngân hàng cố định vs tái tục / nhảy ngân hàng
-  - Tất toán sớm với đánh giá lợi / hại so với lãi kỳ hạn mới
+  - Tất toán cuối kỳ với đánh giá lợi / hại so với lãi kỳ hạn mới
   - DP + beam search trên không gian (bank_id, cash, tuple sổ đang mở)
   - Output: Top 3 lộ trình chi tiết theo tháng
 """
@@ -92,9 +92,6 @@ ACTION_INITIAL       = "initial"
 ACTION_MATURE        = "mature"
 ACTION_OPEN          = "open_book"
 ACTION_HOLD_CASH     = "hold_cash"
-ACTION_EXTRA         = "extra_deposit"
-ACTION_WITHDRAW      = "withdraw"
-ACTION_PARTIAL_CLOSE = "partial_close"
 ACTION_EARLY_CLOSE   = "early_close"
 ACTION_KKH_INTEREST  = "kkh_interest"
 ACTION_TRANSFER_FEE  = "transfer_fee"
@@ -231,9 +228,9 @@ def _generate_multi_book_plans(
     """
     Sinh tất cả cách phân chia cash vào 1..n sổ mới.
     Mỗi sổ có thể ở bất kỳ ngân hàng nào (tự động tính phí chuyển khoản).
-
     Returns: List of (new_books_tuple, remaining_cash, total_fee, steps)
     """
+    # slots = số sổ mở tối đa cùng lúc - số sổ đang mở khả dụng
     slots = max_books - len(active_books)
     if slots <= 0 or cash < min_deposit:
         return []
@@ -242,6 +239,7 @@ def _generate_multi_book_plans(
 
     # Tạo danh sách (bank, term, rate) khả dụng
     options = []
+    # lấy tất cả kỳ hạn và lãi suất của tất cả các ngân hàng nằm tỏng khoảng thời hạn cho phép
     for bank in banks:
         for term, rate in bank.rates.items():
             if term <= months_remaining:
@@ -254,6 +252,7 @@ def _generate_multi_book_plans(
     if not exact:
         # sort theo lãi tuyệt đối trên toàn kỳ, không phải tích
         # Đảm bảo kỳ hạn = duration luôn có mặt nếu tồn tại
+        # sắp xếp giảm dần theo tháng
         options.sort(key=lambda x: x[2], reverse=True)
 
         # Đảm bảo luôn giữ lại option gửi toàn kỳ (term == months_remaining)
@@ -305,14 +304,17 @@ def _generate_multi_book_plans(
                 if (o[0].bank_id, o[1]) not in selected_keys
             ]
 
+            # sắp xếp các options chưa được lấy giảm dần theo rate
             remaining_options.sort(key=lambda x: x[2], reverse=True)
 
+            # lấy max_options là 12
             for o in remaining_options:
                 if len(selected) >= max_open_options:
                     break
                 selected.append(o)
 
             # Deduplicate lần cuối
+            # Tự động remove duplicate.
             dedup = {}
             for bank, term, rate in selected:
                 dedup[(bank.bank_id, term)] = (bank, term, rate)
@@ -320,6 +322,7 @@ def _generate_multi_book_plans(
             options = list(dedup.values())[:max_open_options]
 
     n_limit = slots if exact else min(slots, max_new_books_per_step)
+    # sinh tổ hợp cách chia ra tất cả các state
     for n_new in range(1, n_limit + 1):
         for combo in itertools.combinations(options, n_new):
             for allocation in _allocations(cash, n_new, min_deposit, allocation_step, exact):
@@ -439,10 +442,8 @@ class DPOptimizer:
 
     Thứ tự xử lý mỗi tháng:
       1. Nhận gốc + lãi từ sổ đáo hạn → cash
-      2. Cộng tiền gửi thêm theo lịch
-      3. Tính lãi KKH trên cash
-      4. Xử lý lệnh rút (nếu có)
-      5. Sinh TẤT CẢ lựa chọn:
+      2. Tính lãi KKH trên cash
+      3. Sinh TẤT CẢ lựa chọn:
          a. Giữ cash
          b. Mở 1..m_max sổ tại bất kỳ ngân hàng nào (tự tính phí / trễ)
     """
@@ -505,9 +506,6 @@ class DPOptimizer:
         self,
         initial_amount: float,
         duration_months: int,
-        monthly_extra: float = 0.0,
-        extra_schedule: Optional[List[Dict]] = None,
-        withdrawal_schedule: Optional[List[Dict]] = None,
         prefer_online: bool = True,
     ) -> Dict:
         """
@@ -516,9 +514,6 @@ class DPOptimizer:
         Args:
             initial_amount:      Số tiền ban đầu (VNĐ)
             duration_months:     Tổng thời gian (tháng)
-            monthly_extra:       Gửi thêm cố định mỗi tháng
-            extra_schedule:      [{"month": m, "amount": a}, ...]
-            withdrawal_schedule: [{"month": m, "amount": a}, ...]
         """
         if not self.banks:
             return {
@@ -529,15 +524,10 @@ class DPOptimizer:
                 "error": "There is no suitable bank interest rate data to run DP."
             }
 
-        extra_by_month    = self._build_schedule(monthly_extra, extra_schedule, duration_months)
-        withdraw_by_month = {item["month"]: item["amount"]
-                             for item in (withdrawal_schedule or [])}
         baseline_results = self._baseline_single_deposit(
             initial_amount=initial_amount,
             duration_months=duration_months,
-            enabled=monthly_extra <= 0
-                    and not extra_schedule
-                    and not withdrawal_schedule,
+            enabled=True,
         )
 
         init_state: State = (_r(initial_amount), ())
@@ -575,11 +565,6 @@ class DPOptimizer:
                     final_results.append((final_cash, final_interest, all_steps))
                 continue
 
-            # khởi tạo không gian lưu trữ mới và thu thập tham số môi trường
-            # get số tiền gửi thêm của tháng hiện tại
-            extra = extra_by_month.get(month, 0.0)
-            # get số tiền rút ra có ở tháng này hay không
-            withdraw = withdraw_by_month.get(month, 0.0)
             # months_remaining = duration_months - month
             # số tháng khả dụng để mở sổ mới
             months_remaining = duration_months - month + 1
@@ -640,8 +625,6 @@ class DPOptimizer:
                     month=month,
                     cash=cash,
                     books=books,
-                    extra=extra,
-                    withdraw=withdraw,
                     months_remaining=months_remaining,
                     is_last=is_last,
                     current_bank_id=current_bank_id,
@@ -679,7 +662,7 @@ class DPOptimizer:
                         "final_amount": initial_amount,
                         "achieved_interest": 0.0,
                         "plan_details": [],
-                        "error": "Không tìm được kế hoạch khả thi. Kiểm tra lại lịch rút tiền."
+                        "error": "Không tìm được kế hoạch khả thi."
                     }
 
         final_results, benchmark_result, selection_mode = self._rank_results_against_baseline(
@@ -688,9 +671,6 @@ class DPOptimizer:
         )
         top = final_results[:self.top_n]
 
-        total_extra    = sum(extra_by_month.values())
-        total_withdraw = sum(withdraw_by_month.values())
-
         top_plans = [
             self._format_result(
                 rank=i + 1,
@@ -698,8 +678,6 @@ class DPOptimizer:
                 interest_earned=ie,
                 steps=st,
                 initial_amount=initial_amount,
-                total_extra=total_extra,
-                total_withdraw=total_withdraw,
             )
             for i, (fc, ie, st) in enumerate(top)
         ]
@@ -721,8 +699,6 @@ class DPOptimizer:
                 interest_earned=benchmark_result[1],
                 steps=benchmark_result[2],
                 initial_amount=initial_amount,
-                total_extra=total_extra,
-                total_withdraw=total_withdraw,
             )
         return {
             "algorithm": "dp",
@@ -883,14 +859,12 @@ class DPOptimizer:
         return (_r(final_cash), open_steps)
 
     # Mở rộng trạng thái mỗi tháng
-    # sinh nhánh state mới từ state hiện tại bằng cách thực hiện các hành động: đáo hạn, gửi thêm, rút tiền, giữ cash, mở sổ mới.
+    # sinh nhánh state mới từ state hiện tại bằng cách thực hiện các hành động: đáo hạn, giữ cash, mở sổ mới.
     def _expand(
         self,
         month: int,
         cash: float,
         books: Tuple[Book, ...],
-        extra: float,
-        withdraw: float,
         months_remaining: int,
         is_last: bool,
         current_bank_id: str,
@@ -920,211 +894,66 @@ class DPOptimizer:
             else:
                 live_books.append(b)
 
-        # 2. Tiền gửi thêm
-        if extra > 0:
-            cash = _r(cash + extra)
-            steps_base.append(Step(month=month, action=ACTION_EXTRA, amount=extra))
-
         default_bank = self.bank_map.get(current_bank_id, self.banks[0])
         kkh_rate = default_bank.demand_rate
 
-        withdrawal_bases: List[Tuple[float, Tuple[Book, ...], List[Step], float]] = []
-
-        # 4. Lệnh rút
-        if withdraw > 0:
-            withdraw_step = Step(month=month, action=ACTION_WITHDRAW, amount=withdraw)
-            for new_cash, new_books, wd_steps, wd_delta in self._handle_withdrawal_options(
-                month=month,
-                cash=cash,
-                books=live_books,
-                need=withdraw,
-            ):
-                withdrawal_bases.append((
-                    new_cash,
-                    tuple(new_books),
-                    steps_base + [withdraw_step] + wd_steps,
-                    delta_base + wd_delta,
-                ))
-        else:
-            withdrawal_bases.append((cash, tuple(live_books), steps_base, delta_base))
-
+        # danh sách state mới được sinh ra
         outcomes: List[Tuple[State, float, List[Step]]] = []
 
-        for cash_after_withdraw, active_books, base_steps, base_delta in withdrawal_bases:
-            if is_last:
-                outcomes.append(((cash_after_withdraw, active_books), base_delta, base_steps))
-                continue
+        active_books = tuple(live_books)
+        if is_last:
+            outcomes.append(((cash, active_books), delta_base, steps_base))
+            return outcomes
 
-            # A: Giữ cash
-            hold_steps = list(base_steps)
-            hold_cash = cash_after_withdraw
-            hold_delta = base_delta
-            kkh = _r(cash_after_withdraw * kkh_rate / 12.0)
-            if kkh > 0:
-                hold_cash = _r(hold_cash + kkh)
-                hold_delta += kkh
-                hold_steps.append(Step(
-                    month=month,
-                    action=ACTION_KKH_INTEREST,
-                    amount=kkh,
-                    note=f"Lãi KKH {kkh_rate*100:.2f}%/năm trên {cash_after_withdraw:,.0f} VNĐ"
-                ))
-            outcomes.append((
-                (hold_cash, active_books),
-                hold_delta,
-                hold_steps + [Step(month=month, action=ACTION_HOLD_CASH, amount=_r(hold_cash),
-                                   note="Giữ cash sau khi cộng lãi KKH tháng này")]
+        # A: Giữ cash
+        hold_steps = list(steps_base)
+        hold_cash = cash
+        hold_delta = delta_base
+        kkh = _r(cash * kkh_rate / 12.0)
+        if kkh > 0:
+            hold_cash = _r(hold_cash + kkh)
+            hold_delta += kkh
+            hold_steps.append(Step(
+                month=month,
+                action=ACTION_KKH_INTEREST,
+                amount=kkh,
+                note=f"Lãi KKH {kkh_rate*100:.2f}%/năm trên {cash:,.0f} VNĐ"
             ))
+        outcomes.append((
+            (hold_cash, active_books),
+            hold_delta,
+            hold_steps + [Step(month=month, action=ACTION_HOLD_CASH, amount=_r(hold_cash),
+                               note="Giữ cash sau khi cộng lãi KKH tháng này")]
+        ))
 
-            # B: Mở sổ mới (đơn / đa ngân hàng)
-            if cash_after_withdraw >= self.min_deposit and months_remaining > 0:
-                plans = _generate_multi_book_plans(
-                    cash=cash_after_withdraw,
-                    active_books=active_books,
-                    month=month,
-                    months_remaining=months_remaining,
-                    banks=self.banks,
-                    current_bank_id=current_bank_id,
-                    max_books=self.max_books,
-                    min_deposit=self.min_deposit,
-                    allocation_step=self.allocation_step,
-                    exact=self.exact,
-                    max_open_options=self.max_open_options,
-                    max_plans_per_state=self.max_plans_per_state,
-                    max_new_books_per_step=self.max_new_books_per_step,
-                )
-                for new_books_tuple, remaining_cash, total_fee, open_steps in plans:
-                    merged = active_books + new_books_tuple
-                    # Phí chuyển khoản được trừ vào lãi ròng
-                    outcomes.append((
-                        (remaining_cash, merged),
-                        base_delta - total_fee,
-                        base_steps + open_steps,
-                    ))
+        # B: Mở sổ mới (đơn / đa ngân hàng)
+        if cash >= self.min_deposit and months_remaining > 0:
+            plans = _generate_multi_book_plans(
+                cash=cash,
+                active_books=active_books,
+                month=month,
+                months_remaining=months_remaining,
+                banks=self.banks,
+                current_bank_id=current_bank_id,
+                max_books=self.max_books,
+                min_deposit=self.min_deposit,
+                allocation_step=self.allocation_step,
+                exact=self.exact,
+                max_open_options=self.max_open_options,
+                max_plans_per_state=self.max_plans_per_state,
+                max_new_books_per_step=self.max_new_books_per_step,
+            )
+            # tạo outcomes
+            for new_books_tuple, remaining_cash, total_fee, open_steps in plans:
+                merged = active_books + new_books_tuple
+                # Phí chuyển khoản được trừ vào lãi ròng
+                outcomes.append((
+                    (remaining_cash, merged),
+                    delta_base - total_fee,
+                    steps_base + open_steps,
+                ))
 
         return outcomes
-
-    # Xử lý rút tiền
-
-    def _handle_withdrawal_options(
-        self,
-        month: int,
-        cash: float,
-        books: List[Book],
-        need: float,
-    ) -> List[Tuple[float, List[Book], List[Step], float]]:
-        need = _r(need)
-        if need <= 0:
-            return [(cash, books, [], 0.0)]
-        if cash >= need:
-            return [(_r(cash - need), books, [], 0.0)]
-
-        remaining_after_cash = _r(need - cash)
-        indexed_books = list(enumerate(books))
-        results: List[Tuple[float, List[Book], List[Step], float]] = []
-
-        def add_result(
-            cash_after: float,
-            current_books: List[Optional[Book]],
-            steps: List[Step],
-            delta: float,
-        ) -> None:
-            surviving = [b for b in current_books if b is not None]
-            results.append((_r(max(0.0, cash_after)), surviving, steps, delta))
-
-        def dfs(
-            idx: int,
-            remaining: float,
-            current_books: List[Optional[Book]],
-            steps: List[Step],
-            delta: float,
-            cash_surplus: float,
-        ) -> None:
-            remaining = _r(remaining)
-            if remaining <= 0:
-                add_result(cash_surplus + abs(remaining), current_books, steps, delta)
-                return
-            if idx >= len(indexed_books):
-                return
-
-            orig_idx, book = indexed_books[idx]
-
-            # Không đụng sổ này, thử các sổ khác.
-            dfs(idx + 1, remaining, list(current_books), list(steps), delta, cash_surplus)
-
-            months_held = month - book.open_month
-            kkh_recv = _r(book.kkh_interest(months_held))
-
-            # Tất toán toàn bộ sổ.
-            early_val = _r(book.value_if_closed_early(month))
-            closed_books = list(current_books)
-            closed_books[orig_idx] = None
-            closed_steps = list(steps) + [Step(
-                month=month,
-                action=ACTION_EARLY_CLOSE,
-                amount=early_val,
-                term=book.term,
-                bank_id=book.bank_id,
-                bank_name=book.bank_name,
-                rate_pct=round(book.annual_rate * 100, 3),
-                note=(f"Tất toán sớm sổ {book.term}T tại {book.bank_name}"
-                      f". Lãi KKH: {kkh_recv:,.0f} VNĐ"
-                      f", mất lãi kỳ hạn: {_r(book.interest_full() - kkh_recv):,.0f} VNĐ")
-            )]
-            dfs(
-                idx + 1,
-                _r(remaining - early_val),
-                closed_books,
-                closed_steps,
-                delta + kkh_recv,
-                cash_surplus,
-            )
-
-            # Rút một phần vừa đủ từ sổ này nếu không cần tất toán hết.
-            if remaining < book.principal:
-                kkh_part = _r(remaining * book.demand_rate * (months_held / 12.0))
-                cash_recv = _r(remaining + kkh_part)
-                rem_principal = _r(book.principal - remaining)
-                partial_books = list(current_books)
-                partial_books[orig_idx] = Book(
-                    principal=rem_principal,
-                    term=book.term,
-                    annual_rate=book.annual_rate,
-                    demand_rate=book.demand_rate,
-                    open_month=book.open_month,
-                    close_month=book.close_month,
-                    bank_id=book.bank_id,
-                    bank_name=book.bank_name,
-                )
-                partial_steps = list(steps) + [Step(
-                    month=month,
-                    action=ACTION_PARTIAL_CLOSE,
-                    amount=cash_recv,
-                    term=book.term,
-                    bank_id=book.bank_id,
-                    bank_name=book.bank_name,
-                    rate_pct=round(book.annual_rate * 100, 3),
-                    note=(f"Rút một phần từ sổ {book.term}T tại {book.bank_name}"
-                          f" (còn lại {rem_principal:,.0f} VNĐ)")
-                )]
-                add_result(kkh_part, partial_books, partial_steps, delta + kkh_part)
-
-        dfs(
-            idx=0,
-            remaining=remaining_after_cash,
-            current_books=list(books),
-            steps=[],
-            delta=0.0,
-            cash_surplus=0.0,
-        )
-
-        dedup: Dict[Tuple[float, Tuple[Book, ...]], Tuple[float, List[Book], List[Step], float]] = {}
-        for cash_after, new_books, steps, delta in results:
-            key = (cash_after, tuple(new_books))
-            existing = dedup.get(key)
-            if existing is None or delta > existing[3]:
-                dedup[key] = (cash_after, new_books, steps, delta)
-        return list(dedup.values())
 
     # Tất toán cuối kỳ
 
@@ -1278,23 +1107,6 @@ class DPOptimizer:
         latest = max(books, key=lambda b: b.open_month)
         return latest.bank_id
 
-    def _build_schedule(
-        self,
-        monthly_extra: float,
-        extra_schedule: Optional[List[Dict]],
-        duration_months: int,
-    ) -> Dict[int, float]:
-        result: Dict[int, float] = {}
-        if extra_schedule is not None:
-            for item in extra_schedule:
-                m, a = item["month"], item["amount"]
-                result[m] = result.get(m, 0.0) + a
-        if monthly_extra > 0:
-            for m in range(1, duration_months + 1):
-                if m not in result:
-                    result[m] = monthly_extra
-        return result
-
     def _format_result(
         self,
         rank: int,
@@ -1302,10 +1114,7 @@ class DPOptimizer:
         interest_earned: float,
         steps: List[Step],
         initial_amount: float,
-        total_extra: float,
-        total_withdraw: float,
     ) -> Dict:
-        net_contribution = initial_amount + total_extra - total_withdraw
         # Phân tích ngân hàng được dùng
         banks_used = list({s.bank_id for s in steps
                           if s.action == ACTION_OPEN and s.bank_id})
@@ -1323,9 +1132,7 @@ class DPOptimizer:
             "total_transfer_fees": _r(total_fees),
             "summary": {
                 "initial_amount": initial_amount,
-                "total_extra_deposited": _r(total_extra),
-                "total_withdrawn": _r(total_withdraw),
-                "net_contribution": _r(net_contribution),
+                "net_contribution": _r(initial_amount),
             },
             "steps": [self._step_to_dict(s) for s in steps],
         }

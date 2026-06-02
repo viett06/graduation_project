@@ -4,10 +4,11 @@ from typing import Dict, Any, List
 
 from app.repository.interestRateRepository import InterestRateRepository
 from app.service.algorithm.dp_algorithm import DPOptimizer, BankProfile as DPBankProfile
-from app.service.algorithm.greedy_algorithm import GreedyAlgorithm
-from app.service.algorithm.monte_carlo import MonteCarloAlgorithm
-from app.service.algorithm.rule_based import RuleBasedAlgorithm
-from app.schemas.savingPlanSchema import SavingPlanCreate, SavingPlanOptionSave
+from app.schemas.savingPlanSchema import (
+    SavingPlanCreate,
+    SavingPlanFixedTermCreate,
+    SavingPlanOptionSave,
+)
 from app.models.saving_plans import SavingPlans
 from app.repository.bank_repository import BankRepository
 
@@ -19,9 +20,6 @@ class SavingPlanService:
         self.bank_repo = BankRepository(db)
         self.rate_repo = InterestRateRepository(db)
         self.dp = None
-        self.greedy = GreedyAlgorithm(self.rate_repo)
-        self.mc = MonteCarloAlgorithm(self.rate_repo)
-        self.rule = RuleBasedAlgorithm(self.rate_repo)
 
     # def banks_rate_follow_duration_alls(self, term_month:int, codes: List[str]):
     #     banks = self.bank_repo.get_all_banks_and_rates_follow_duration_month(term_month, codes)
@@ -158,11 +156,7 @@ class SavingPlanService:
         # --- Chuẩn bị tham số cho thuật toán ---
         initial_amount = request.total_amount
         duration_months = request.duration_month
-        monthly_extra = getattr(request, 'monthly_extra', 0) or 0
-        extra_schedule = getattr(request, 'extra_schedule', None)
-        withdrawal_schedule = getattr(request, 'withdrawal_schedule', None)
         prefer_rate = getattr(request, 'prefer_rate', None)
-        risk_tolerance = getattr(request, 'risk_tolerance', 'low')
         codes = getattr(request, 'codes', [])
 
         choice_prefer = True
@@ -174,75 +168,21 @@ class SavingPlanService:
             case _:
                 choice_prefer = True
 
-        # --- Chọn thuật toán ---
-        algo = (request.algorithm_used or "auto").lower()
-        if algo == "auto":
-            # Heuristic tự động chọn
-            if (withdrawal_schedule and len(withdrawal_schedule) > 0) or \
-               (extra_schedule and len(extra_schedule) > 1):
-                algo = "dp"
-            elif risk_tolerance != "low":
-                algo = "monte_carlo"
-            else:
-                algo = "greedy"
-
-        # --- Gọi đúng thuật toán ---
-        if algo == "dp":
-            dp_banks = self.banks_rate_follow_duration_alls(
-                duration_months,
-                codes=codes,
-                channel="ONLINE" if choice_prefer else "COUNTER"
-            )
-            self.dp = DPOptimizer(
-                banks=dp_banks,
-                default_bank_id=dp_banks[0].bank_id if dp_banks else "",
-            )
-            result = self.dp.optimize(
-                initial_amount, duration_months,
-                monthly_extra, extra_schedule,
-                withdrawal_schedule, choice_prefer
-            )
-        elif algo == "greedy":
-            result = self.greedy.optimize(
-                initial_amount, duration_months,
-                monthly_extra, extra_schedule,
-                withdrawal_schedule, choice_prefer
-            )
-        elif algo == "monte_carlo":
-            mc_result = self.mc.simulate(
-                initial_amount, duration_months,
-                monthly_extra, extra_schedule,
-                withdrawal_schedule, choice_prefer,
-                num_simulations=500
-            )
-            # Tính xác suất đạt goal_amount
-            target_total = request.goal_amount
-            # Giả sử mc_result có chứa danh sách final_balances (cần cập nhật trong monte_carlo)
-            # Ở đây tạm dùng expected_final và giả lập probability
-            probability = 0.75  # placeholder: thực tế nên tính từ phân phối
-            result = {
-                "algorithm": "monte_carlo",
-                "final_amount": mc_result.get('expected_final', initial_amount),
-                "achieved_interest": mc_result.get('expected_final', initial_amount) - initial_amount,
-                "probability_success": probability,
-                "plan_details": mc_result
-            }
-        else:  # rule_based
-            result = self.rule.recommend(
-                initial_amount, duration_months,
-                monthly_extra, extra_schedule,
-                withdrawal_schedule, choice_prefer
-            )
-            # Tính lãi đạt được
-            if 'final_amount' in result:
-                result['achieved_interest'] = result['final_amount'] - initial_amount
-                if monthly_extra:
-                    total_extra = monthly_extra * duration_months
-                    result['achieved_interest'] -= total_extra
-            else:
-                result['final_amount'] = initial_amount
-                result['achieved_interest'] = 0
-
+        algo = "dp"
+        dp_banks = self.banks_rate_follow_duration_alls(
+            duration_months,
+            codes=codes,
+            channel="ONLINE" if choice_prefer else "COUNTER"
+        )
+        self.dp = DPOptimizer(
+            banks=dp_banks,
+            default_bank_id=dp_banks[0].bank_id if dp_banks else "",
+        )
+        result = self.dp.optimize(
+            initial_amount=initial_amount,
+            duration_months=duration_months,
+            prefer_online=choice_prefer,
+        )
         result = self._normalize_algorithm_result(result, algo, initial_amount)
 
         # --- Chuẩn bị response ---
@@ -268,6 +208,90 @@ class SavingPlanService:
         """
         return self.optimize_plan(request)
 
+    def create_fixed_term_plan(self, request: SavingPlanFixedTermCreate) -> Dict[str, Any]:
+        amount = float(request.total_amount)
+        term_month = int(request.term_month)
+        channel = request.channel.upper() if request.channel else None
+
+        if amount <= 0:
+            raise ValueError("total_amount must be greater than 0")
+        if term_month <= 0:
+            raise ValueError("term_month must be greater than 0")
+
+        best_rate = self.bank_repo.get_best_rate_for_term(
+            term_month=term_month,
+            amount=amount,
+            channel=channel,
+        )
+        if not best_rate:
+            raise ValueError("Không tìm thấy lãi suất phù hợp với kỳ hạn và số tiền đã chọn.")
+
+        raw_rate = float(best_rate["rate"])
+        annual_rate = self._normalize_annual_rate(raw_rate)
+        annual_rate_pct = raw_rate if raw_rate > 1 else raw_rate * 100
+        achieved_interest = round(amount * annual_rate * term_month / 12.0, 2)
+        final_amount = round(amount + achieved_interest, 2)
+
+        plan_details = {
+            "strategy": "fixed_term_highest_rate",
+            "summary": {
+                "initial_amount": amount,
+                "term_month": term_month,
+                "annual_rate_pct": annual_rate_pct,
+                "interest_earned": achieved_interest,
+                "final_amount": final_amount,
+            },
+            "steps": [
+                {
+                    "month": 0,
+                    "action": "initial",
+                    "amount": amount,
+                    "note": f"Số tiền ban đầu: {amount:,.0f} VNĐ",
+                },
+                {
+                    "month": 1,
+                    "action": "open_book",
+                    "amount": amount,
+                    "term_months": term_month,
+                    "bank_id": best_rate["bank_code"],
+                    "bank_name": best_rate["bank_name"],
+                    "annual_rate_pct": annual_rate_pct,
+                    "channel": best_rate["channel"],
+                    "note": (
+                        f"Gửi toàn bộ số tiền vào {best_rate['bank_name']} "
+                        f"kỳ hạn {term_month} tháng với lãi suất {annual_rate_pct:.2f}%/năm"
+                    ),
+                },
+                {
+                    "month": term_month + 1,
+                    "action": "mature",
+                    "amount": final_amount,
+                    "term_months": term_month,
+                    "bank_id": best_rate["bank_code"],
+                    "bank_name": best_rate["bank_name"],
+                    "annual_rate_pct": annual_rate_pct,
+                    "channel": best_rate["channel"],
+                    "note": (
+                        f"Đáo hạn: gốc {amount:,.0f} + lãi {achieved_interest:,.0f} VNĐ"
+                    ),
+                },
+            ],
+        }
+
+        return {
+            "plan_id": None,
+            "bank_id": best_rate["bank_id"],
+            "bank_code": best_rate["bank_code"],
+            "bank_name": best_rate["bank_name"],
+            "term_month": term_month,
+            "channel": best_rate["channel"],
+            "annual_rate_pct": annual_rate_pct,
+            "total_amount": amount,
+            "achieved_interest": achieved_interest,
+            "final_amount": final_amount,
+            "plan_details": plan_details,
+        }
+
     def save_plan_option(self, user_id: int, request: SavingPlanOptionSave) -> SavingPlans:
         plan_data = request.plan_data
         plan = SavingPlans(
@@ -277,7 +301,7 @@ class SavingPlanService:
             goal_amount=request.goal_amount,
             duration_month=request.duration_month,
             plan_data=plan_data,
-            algorithm_used=request.algorithm_used,
+            algorithm_used="dp",
             notes=request.notes,
             is_active=True
         )

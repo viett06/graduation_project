@@ -70,6 +70,44 @@ class BankRepository:
         query = text("SELECT * FROM interest_rates WHERE bank_id = :bank_id")
         return self.session.execute(query, {"bank_id": bank_id}).mappings().all()
 
+    def get_best_rate_for_term(
+            self,
+            term_month: int,
+            amount: float,
+            channel: str | None = None,
+    ):
+        query = text("""
+            SELECT b.id AS bank_id,
+                   UPPER(b.code) AS bank_code,
+                   b.name AS bank_name,
+                   ir.rate,
+                   ir.term_month,
+                   UPPER(ir.channel) AS channel,
+                   ir.min_amount,
+                   ir.max_amount,
+                   ir.effective_date,
+                   ir.updated_at
+            FROM banks AS b
+            JOIN interest_rates AS ir ON b.id = ir.bank_id
+            WHERE b.status = TRUE
+              AND ir.is_current = TRUE
+              AND ir.rate IS NOT NULL
+              AND ir.term_month = :term_month
+              AND (ir.min_amount <= :amount OR ir.min_amount IS NULL)
+              AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
+              AND (:channel IS NULL OR UPPER(ir.channel) = UPPER(:channel))
+            ORDER BY ir.rate DESC, ir.effective_date DESC, ir.updated_at DESC, b.name ASC
+            LIMIT 1
+        """)
+        return self.session.execute(
+            query,
+            {
+                "term_month": term_month,
+                "amount": amount,
+                "channel": channel,
+            }
+        ).mappings().first()
+
     def commit(self):
         self.session.commit()
 

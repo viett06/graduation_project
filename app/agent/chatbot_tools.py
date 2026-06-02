@@ -1,120 +1,192 @@
+number_like = ["number", "integer", "string", "null"]
+integer_like = ["integer", "string", "null"]
+
 tools = [
     {
         "type": "function",
         "function": {
-            "name": "get_all_banks_and_rates_for_chat_bot",
-            "description": "Tra cứu, so sánh lãi suất ngân hàng hoặc tìm lãi suất cao nhất.",
+            "name": "get_rates",
+            "description": (
+                "Tra cứu lãi suất tiết kiệm từ backend. Dùng khi người dùng hỏi lãi suất, "
+                "lãi suất cao nhất, danh sách lãi suất, hoặc so sánh lãi suất giữa các ngân hàng. "
+                "Không dùng để tính số tiền lãi thực nhận."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": ["string", "null"], "description": "Tên ngân hàng hoặc null."},
-                    "type": {"type": ["string", "null"], "description": "STATE, PRIVATE hoặc null."},
-                    "code": {"type": ["string", "null"], "description": "Mã ngân hàng hoặc null."}
+                    "bank_name": {
+                        "type": ["string", "null"],
+                        "description": "Tên một ngân hàng người dùng nhắc tới, ví dụ Vietcombank."
+                    },
+                    "bank_names": {
+                        "type": ["array", "string", "null"],
+                        "description": "Danh sách tên ngân hàng nếu người dùng nhắc nhiều ngân hàng.",
+                        "items": {"type": "string"}
+                    },
+                    "bank_code": {
+                        "type": ["string", "null"],
+                        "description": "Mã một ngân hàng người dùng nhắc tới, ví dụ VCB, BIDV, PVB."
+                    },
+                    "bank_codes": {
+                        "type": ["array", "string", "null"],
+                        "description": "Danh sách mã ngân hàng nếu người dùng nhắc nhiều mã.",
+                        "items": {"type": "string"}
+                    },
+                    "bank_type": {
+                        "type": ["string", "null"],
+                        "description": "Loại ngân hàng nếu có, ví dụ STATE hoặc PRIVATE."
+                    },
+                    "term_month": {
+                        "type": integer_like,
+                        "description": "Kỳ hạn gửi theo tháng, ví dụ 6 hoặc '6'."
+                    },
+                    "channel": {
+                        "type": ["string", "null"],
+                        "description": "Kênh gửi nếu có: ONLINE hoặc COUNTER."
+                    },
+                    "amount": {
+                        "type": number_like,
+                        "description": "Số tiền gửi nếu người dùng nêu, ví dụ 500000000 hoặc '500 triệu'."
+                    },
+                    "sort": {
+                        "type": ["string", "null"],
+                        "enum": ["highest", "compare", "list", None],
+                        "description": "highest nếu hỏi cao nhất/tốt nhất, compare nếu so sánh, list nếu liệt kê."
+                    },
+                    "limit": {
+                        "type": integer_like,
+                        "description": "Số dòng tối đa cần lấy, ví dụ 5 hoặc '5'."
+                    }
                 },
-                "required": ["name", "type", "code"],
                 "additionalProperties": False
             },
-            "strict": True,
         }
     },
     {
         "type": "function",
         "function": {
             "name": "calculate_deposit_interest",
-            "description": "Tính lãi tiền gửi theo ngân hàng, số tiền, kỳ hạn, kênh và ngày gửi.",
+            "description": (
+                "Tính số tiền lãi và tổng tiền cuối kỳ khi gửi tiết kiệm ở một ngân hàng. "
+                "Model chỉ cung cấp mã hoặc tên ngân hàng, backend sẽ tự resolve bank_id nội bộ."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "bank_id": {"type": ["integer", "null"], "description": "ID ngân hàng hoặc null."},
-                    "bank_code": {"type": ["string", "null"], "description": "Mã ngân hàng hoặc null."},
-                    "bank_name": {"type": ["string", "null"], "description": "Tên ngân hàng hoặc null."},
-                    "channel": {"type": ["string", "null"], "description": "ONLINE hoặc COUNTER."},
-                    "term_month": {"type": "integer", "description": "Kỳ hạn tháng."},
-                    "amount": {"type": "number", "description": "Số tiền VND."},
-                    "deposit_date": {"type": ["string", "null"], "description": "YYYY-MM-DD hoặc null."}
+                    "bank_code": {
+                        "type": ["string", "null"],
+                        "description": "Mã ngân hàng nếu người dùng nêu, ví dụ VCB, BIDV, PVB."
+                    },
+                    "bank_name": {
+                        "type": ["string", "null"],
+                        "description": "Tên ngân hàng nếu người dùng nêu."
+                    },
+                    "channel": {
+                        "type": ["string", "null"],
+                        "description": "Kênh gửi nếu có: ONLINE hoặc COUNTER."
+                    },
+                    "term_month": {
+                        "type": integer_like,
+                        "description": "Kỳ hạn gửi theo tháng, ví dụ 6 hoặc '6'."
+                    },
+                    "amount": {
+                        "type": number_like,
+                        "description": "Số tiền gửi VND, ví dụ 500000000 hoặc '500 triệu'."
+                    },
+                    "deposit_date": {
+                        "type": ["string", "null"],
+                        "description": "Ngày gửi dạng YYYY-MM-DD nếu người dùng nêu."
+                    }
                 },
-                "required": [
-                    "bank_id",
-                    "bank_code",
-                    "bank_name",
-                    "channel",
-                    "term_month",
-                    "amount",
-                    "deposit_date"
-                ],
                 "additionalProperties": False
             },
-            "strict": True,
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_bank_interest",
+            "description": (
+                "So sánh tiền lãi hoặc tổng tiền nhận được giữa ít nhất hai ngân hàng. "
+                "Nếu thiếu số tiền hoặc kỳ hạn, backend sẽ trả missing_fields để hỏi người dùng bổ sung."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bank_codes": {
+                        "type": ["array", "string", "null"],
+                        "description": "Danh sách mã ngân hàng, ví dụ ['PVB', 'SGB'].",
+                        "items": {"type": "string"}
+                    },
+                    "bank_names": {
+                        "type": ["array", "string", "null"],
+                        "description": "Danh sách tên ngân hàng nếu người dùng không nêu mã.",
+                        "items": {"type": "string"}
+                    },
+                    "channel": {
+                        "type": ["string", "null"],
+                        "description": "Kênh gửi nếu có: ONLINE hoặc COUNTER."
+                    },
+                    "term_month": {
+                        "type": integer_like,
+                        "description": "Kỳ hạn gửi theo tháng, ví dụ 6 hoặc '6'."
+                    },
+                    "amount": {
+                        "type": number_like,
+                        "description": "Số tiền gửi VND, ví dụ 500000000 hoặc '500 triệu'."
+                    },
+                    "deposit_date": {
+                        "type": ["string", "null"],
+                        "description": "Ngày gửi dạng YYYY-MM-DD nếu người dùng nêu."
+                    }
+                },
+                "additionalProperties": False
+            },
         }
     },
     {
         "type": "function",
         "function": {
             "name": "create_saving_plan",
-            "description": "Lập hoặc tối ưu kế hoạch gửi tiết kiệm theo mục tiêu.",
+            "description": (
+                "Lập hoặc tối ưu kế hoạch gửi tiết kiệm theo mục tiêu. "
+                "Nếu thiếu tổng tiền hoặc thời gian, backend sẽ trả missing_fields."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": ["integer", "null"], "description": "ID user hoặc null."},
-                    "name": {"type": ["string", "null"], "description": "Tên kế hoạch hoặc null."},
-                    "duration_month": {"type": "integer", "description": "Thời gian tháng."},
-                    "total_amount": {"type": "number", "description": "Số tiền ban đầu."},
-                    "goal_amount": {"type": ["number", "null"], "description": "Mục tiêu cuối kỳ hoặc null."},
-                    "monthly_extra": {"type": ["number", "null"], "description": "Gửi thêm mỗi tháng."},
-                    "extra_schedule": {
-                        "type": ["array", "null"],
-                        "description": "Lịch gửi thêm.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "month": {"type": "integer"},
-                                "amount": {"type": "number"}
-                            },
-                            "required": ["month", "amount"],
-                            "additionalProperties": False
-                        }
+                    "name": {
+                        "type": ["string", "null"],
+                        "description": "Tên kế hoạch nếu người dùng nêu."
                     },
-                    "withdrawal_schedule": {
-                        "type": ["array", "null"],
-                        "description": "Lịch rút tiền.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "month": {"type": "integer"},
-                                "amount": {"type": "number"}
-                            },
-                            "required": ["month", "amount"],
-                            "additionalProperties": False
-                        }
+                    "duration_month": {
+                        "type": integer_like,
+                        "description": "Thời gian kế hoạch theo tháng, ví dụ 12 hoặc '12'."
                     },
-                    "prefer_rate": {"type": ["string", "null"], "description": "ONLINE hoặc COUNTER."},
-                    "risk_tolerance": {"type": ["string", "null"], "description": "low, medium, high."},
-                    "algorithm_used": {"type": ["string", "null"], "description": "auto, dp, greedy, monte_carlo, rule_based."},
-                    "codes": {
-                        "type": ["array", "null"],
-                        "description": "Mã ngân hàng hoặc null.",
+                    "total_amount": {
+                        "type": number_like,
+                        "description": "Số tiền ban đầu, ví dụ 100000000 hoặc '100 triệu'."
+                    },
+                    "goal_amount": {
+                        "type": number_like,
+                        "description": "Mục tiêu cuối kỳ nếu có."
+                    },
+                    "prefer_rate": {
+                        "type": ["string", "null"],
+                        "description": "ONLINE hoặc COUNTER."
+                    },
+                    "bank_codes": {
+                        "type": ["array", "string", "null"],
+                        "description": "Mã ngân hàng muốn ưu tiên nếu có.",
                         "items": {"type": "string"}
                     },
-                    "notes": {"type": ["string", "null"], "description": "Ghi chú hoặc null."}
+                    "notes": {
+                        "type": ["string", "null"],
+                        "description": "Ghi chú nếu có."
+                    }
                 },
-                "required": [
-                    "user_id",
-                    "name",
-                    "duration_month",
-                    "total_amount",
-                    "goal_amount",
-                    "monthly_extra",
-                    "extra_schedule",
-                    "withdrawal_schedule",
-                    "prefer_rate",
-                    "risk_tolerance",
-                    "algorithm_used",
-                    "codes",
-                    "notes"
-                ],
                 "additionalProperties": False
             },
-            "strict": True,
         }
     }
 ]

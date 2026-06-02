@@ -11,19 +11,14 @@ class SavingPlanBase(BaseModel):
     notes: Optional[str] = None
 
 class SavingPlanCreate(SavingPlanBase):
-    monthly_extra: Optional[float] = 0                      # gửi thêm mỗi tháng cố định
-    extra_schedule: Optional[List[Dict[str, Any]]] = []   # gửi thêm theo lịch: [{"month": 2, "amount": 1000000}]
-    withdrawal_schedule: Optional[List[Dict[str, Any]]] = []  # rút tiền: [{"month": 3, "amount": 5000000}]
     prefer_rate: Optional[str] =  "ONLINE"              # ưu tiên lãi suất online
-    risk_tolerance: Optional[str] = "low"                   # low, medium, high
-    algorithm_used: Optional[str] = "dp"                  # auto, dp, greedy, monte_carlo, rule_based
     codes: Optional[List[str]] = []                    # chỉ chọn ngân hàng có mã trong list này
 
 class SavingPlanResponse(SavingPlanBase):
     id: int
     is_active: bool
     created_at: datetime
-    algorithm_used: str          # thuật toán thực tế đã dùng (sau auto)
+    algorithm_used: str
     plan_data: Dict[str, Any] | List[Dict[str, Any]]
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,9 +32,26 @@ class SavingPlanOptimizeResponse(BaseModel):
     algorithm_used: str
     probability_success: Optional[float] = None
 
+class SavingPlanFixedTermCreate(BaseModel):
+    total_amount: float
+    term_month: int
+    channel: Optional[str] = None
+
+class SavingPlanFixedTermResponse(BaseModel):
+    plan_id: Optional[int] = None
+    bank_id: int
+    bank_code: str
+    bank_name: str
+    term_month: int
+    channel: str
+    annual_rate_pct: float
+    total_amount: float
+    achieved_interest: float
+    final_amount: float
+    plan_details: Dict[str, Any]
+
 class SavingPlanOptionSave(SavingPlanBase):
     plan_data: Dict[str, Any]
-    algorithm_used: str = "dp"
 
 class SavingPlanDeleteResponse(BaseModel):
     id: int

@@ -2,10 +2,12 @@ import os
 import json
 import re
 import httpx
+import asyncio
 from groq import Groq
 from dotenv import load_dotenv
+from app.agent.chatbot_tools import tools
 from app.models.bank import Bank
-from app.schemas.bankSchema import CompareCalculateRequest, InterestCalculateRequest
+from app.schemas.bankSchema import InterestCalculateRequest
 from app.schemas.savingPlanSchema import SavingPlanCreate
 from app.service.bankService import BankService
 from app.service.chatbotConversationService import ChatbotConversationService
@@ -13,6 +15,7 @@ from app.service.SavingPlanService import SavingPlanService
 from sqlalchemy.orm import Session
 from datetime import date
 from decimal import Decimal
+from collections.abc import AsyncGenerator
 
 load_dotenv()
 
@@ -27,34 +30,33 @@ OUT_OF_SCOPE_ANSWER = "câu hỏi của bạn sẽ được cập nhật sau."
 MAX_RATE_ROWS_FOR_LLM = 15
 MODEL_NAME = "llama-3.3-70b-versatile"
 ANSWER_MAX_TOKENS = 500
-ROUTER_SYSTEM_PROMPT = """
-Bạn là bộ phân tích ý định cho chatbot tài chính ngân hàng.
-Chỉ trả về JSON hợp lệ, không markdown, không giải thích.
+MAX_TOOL_ROUNDS = 3
+MAX_MODEL_RETRIES = 2
+STREAM_CHUNK_SIZE = 24
+TOOL_RETRY_SYSTEM_PROMPT = """
+Tool call trước đó bị sai format hoặc sai schema.
+Hãy gọi tool bằng API tool_calls hợp lệ của hệ thống, không viết tool call trong text.
+Chỉ dùng đúng tên tool và đúng properties đã khai báo. Nếu thiếu dữ liệu, vẫn gọi tool với những field đã biết.
+"""
+ANSWER_RETRY_SYSTEM_PROMPT = """
+Lần trả lời trước không hợp lệ. Hãy trả lời ngắn gọn bằng tiếng Việt, không gọi tool trong text,
+không tự viết JSON, và không bịa số liệu.
+"""
+AGENT_SYSTEM_PROMPT = f"""
+Bạn là trợ lý tài chính ngân hàng bằng tiếng Việt.
 
-Schema:
-{
-  "intent": "get_rates | calculate_deposit_interest | compare_bank_interest | create_saving_plan | out_of_scope",
-  "params": {}
-}
-
-Quy tắc:
-- Luôn dùng Context hội thoại gần đây nếu Prompt hiện tại là câu trả lời tiếp nối.
-- Nếu Prompt hiện tại chỉ bổ sung dữ liệu còn thiếu như số tiền, kỳ hạn, ngày gửi,
-  hãy giữ intent và ngân hàng từ context trước đó rồi merge params.
-- get_rates: khi hỏi lãi suất, so sánh lãi suất, lãi suất cao nhất.
-  params gồm: name, type, code, codes, term_month, sort, limit.
-  sort là "highest", "compare" hoặc "list".
-  codes là danh sách mã ngân hàng nếu người dùng nêu nhiều mã, ví dụ ["PVB","SGB"].
-- calculate_deposit_interest: khi hỏi gửi X tiền Y tháng được bao nhiêu lãi.
-  params gồm: bank_id, bank_code, bank_name, channel, term_month, amount, deposit_date.
-- compare_bank_interest: khi hỏi so sánh tiền lãi/tổng tiền sinh ra giữa 2 ngân hàng.
-  params gồm: codes, bank_names, channel, term_month, amount, deposit_date.
-  Nếu người dùng cũng hỏi so sánh lãi suất, vẫn dùng intent này và giữ codes/term_month.
-- create_saving_plan: khi hỏi lập/tối ưu kế hoạch tiết kiệm.
-  params gồm đúng dữ liệu cần cho kế hoạch tiết kiệm nếu có.
-- out_of_scope: câu hỏi ngoài ngân hàng/lãi suất/tiết kiệm.
-- Nếu thiếu amount cho compare_bank_interest hoặc calculate_deposit_interest thì để amount là null.
-- Giá trị không có thì dùng null, list không có thì dùng [].
+Nguyên tắc:
+- Khi người dùng hỏi về lãi suất, tính lãi, so sánh ngân hàng hoặc lập kế hoạch tiết kiệm,
+  hãy dùng tools được cung cấp để lấy dữ liệu backend. Không tự đoán số liệu.
+- Nếu người dùng trả lời tiếp để bổ sung dữ liệu còn thiếu, hãy dựa vào Context hội thoại gần đây
+  và gọi lại tool phù hợp với dữ liệu đã merge.
+- Nếu thiếu trường bắt buộc để tính toán, vẫn gọi tool khi có thể; backend sẽ trả missing_fields,
+  sau đó hỏi lại đúng thông tin còn thiếu.
+- Nếu câu hỏi ngoài phạm vi ngân hàng/lãi suất/tiết kiệm, trả lời đúng câu: "{OUT_OF_SCOPE_ANSWER}"
+- Trả lời ngắn gọn, tự nhiên, không bịa dữ liệu ngoài tool result.
+- Khi cần dùng tool, hãy gọi tool qua cơ chế tool calling được cung cấp.
+Không tự viết cú pháp <function=...> trong nội dung trả lời.
+Không trả JSON tool call trong text.
 """
 
 
@@ -70,7 +72,175 @@ def to_jsonable(value):
     return json.loads(json.dumps(value, ensure_ascii=False, default=json_default))
 
 
-def compact_rate_rows(rows: list[dict], limit: int = MAX_RATE_ROWS_FOR_LLM) -> list[dict]:
+def encode_stream_event(event: str, data: dict) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, default=json_default)}\n\n"
+    )
+
+
+def split_text_chunks(text: str, chunk_size: int = STREAM_CHUNK_SIZE) -> list[str]:
+    if not text:
+        return []
+    return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
+
+
+def as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def split_code_values(values) -> list[str]:
+    codes = []
+    for value in as_list(values):
+        for code in re.split(r"[,;/]|\s+(?:và|va|and)\s+", str(value), flags=re.IGNORECASE):
+            code = code.strip()
+            if code:
+                codes.append(code)
+    return codes
+
+
+def coerce_int(value) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+
+    match = re.search(r"\d+(?:[.,]\d+)?", str(value))
+    return int(float(match.group(0).replace(",", "."))) if match else None
+
+
+def coerce_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    text = str(value).strip().lower()
+    match = re.search(r"\d+(?:[.,]\d+)?", text)
+    if not match:
+        return None
+
+    number = float(match.group(0).replace(",", "."))
+    if any(unit in text for unit in ("tỷ", "ty", "billion")):
+        return number * 1_000_000_000
+    if any(unit in text for unit in ("triệu", "trieu", "million")):
+        return number * 1_000_000
+    if any(unit in text for unit in ("nghìn", "ngan", "k ")):
+        return number * 1_000
+    return number
+
+
+def parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def parse_failed_tool_generation(error: Exception) -> tuple[str, dict] | None:
+    raw_error = str(error)
+    match = re.search(
+        r"<function=(?P<name>[A-Za-z_][A-Za-z0-9_]*)>?(?P<args>\{.*?\})</function>",
+        raw_error,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+
+    try:
+        arguments = json.loads(match.group("args"))
+    except json.JSONDecodeError:
+        return None
+
+    return match.group("name"), arguments
+
+
+def is_model_tool_error(error: Exception) -> bool:
+    raw_error = str(error)
+    return (
+        "tool_use_failed" in raw_error
+        or "Failed to call a function" in raw_error
+        or "failed_generation" in raw_error
+        or "tool call validation failed" in raw_error
+    )
+
+
+def create_chat_completion_with_retry(
+        messages: list[dict],
+        use_tools: bool = False,
+        retry_system_prompt: str = ANSWER_RETRY_SYSTEM_PROMPT,
+        initial_temperature: float = 0.2,
+):
+    last_error = None
+
+    for attempt in range(MAX_MODEL_RETRIES + 1):
+        attempt_messages = messages
+        if attempt > 0:
+            attempt_messages = [
+                *messages,
+                {"role": "system", "content": retry_system_prompt},
+            ]
+
+        try:
+            kwargs = {
+                "model": MODEL_NAME,
+                "messages": attempt_messages,
+                "temperature": 0 if attempt > 0 else initial_temperature,
+                "max_tokens": ANSWER_MAX_TOKENS,
+            }
+            if use_tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            return client.chat.completions.create(**kwargs)
+        except Exception as e:
+            last_error = e
+            if not use_tools or not is_model_tool_error(e) or attempt >= MAX_MODEL_RETRIES:
+                raise
+            print(f"[Model Retry {attempt + 1}/{MAX_MODEL_RETRIES}] {e}")
+
+    raise last_error
+
+
+def create_chat_completion_stream(
+        messages: list[dict],
+        initial_temperature: float = 0.2,
+):
+    return client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        temperature=initial_temperature,
+        max_tokens=ANSWER_MAX_TOKENS,
+        stream=True,
+    )
+
+
+def iter_stream_content_chunks(stream):
+    for event in stream:
+        if not event.choices:
+            continue
+        delta = event.choices[0].delta
+        content = getattr(delta, "content", None)
+        if content:
+            yield content
+
+
+def compact_rate_rows(
+        rows: list[dict],
+        limit: int = MAX_RATE_ROWS_FOR_LLM,
+        unique_bank: bool = False,
+) -> list[dict]:
     def rate_value(item: dict) -> float:
         try:
             return float(item.get("rate") or 0)
@@ -82,7 +252,7 @@ def compact_rate_rows(rows: list[dict], limit: int = MAX_RATE_ROWS_FOR_LLM) -> l
     seen = set()
 
     for item in sorted_rows:
-        key = (
+        key = item.get("code") if unique_bank else (
             item.get("code"),
             item.get("term_month"),
             item.get("rate"),
@@ -102,32 +272,17 @@ def compact_rate_rows(rows: list[dict], limit: int = MAX_RATE_ROWS_FOR_LLM) -> l
     return compacted
 
 
-def parse_json_object(content: str) -> dict:
-    if not content:
-        return {"intent": "out_of_scope", "params": {}}
-
-    cleaned = content.strip()
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if match:
-        cleaned = match.group(0)
-
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        return {"intent": "out_of_scope", "params": {}}
-
-    if not isinstance(parsed, dict):
-        return {"intent": "out_of_scope", "params": {}}
-
-    parsed.setdefault("intent", "out_of_scope")
-    parsed.setdefault("params", {})
-    return parsed
-
-
-def normalize_router_params(params: dict) -> dict:
+def normalize_tool_params(params: dict) -> dict:
     normalized = dict(params or {})
 
-    for key in ("name", "type", "code", "bank_code", "bank_name", "channel", "deposit_date"):
+    if normalized.get("bank_name") and not normalized.get("name"):
+        normalized["name"] = normalized["bank_name"]
+    if normalized.get("bank_code") and not normalized.get("code"):
+        normalized["code"] = normalized["bank_code"]
+    if normalized.get("bank_type") and not normalized.get("type"):
+        normalized["type"] = normalized["bank_type"]
+
+    for key in ("name", "type", "code", "bank_code", "bank_name", "bank_type", "channel", "deposit_date"):
         if normalized.get(key) == "":
             normalized[key] = None
 
@@ -136,131 +291,44 @@ def normalize_router_params(params: dict) -> dict:
     if normalized.get("bank_code"):
         normalized["bank_code"] = normalized["bank_code"].strip().upper()
 
-    codes = normalized.get("codes") or []
+    codes = split_code_values(normalized.get("codes")) + split_code_values(normalized.get("bank_codes"))
     if normalized.get("code") and normalized["code"] not in codes:
         codes.append(normalized["code"])
     normalized["codes"] = [code.strip().upper() for code in codes if code]
 
-    bank_names = normalized.get("bank_names") or []
+    bank_names = as_list(normalized.get("bank_names"))
+    if normalized.get("name"):
+        bank_names.append(normalized["name"])
     normalized["bank_names"] = [name.strip() for name in bank_names if name]
 
-    if normalized.get("limit") is None:
-        normalized["limit"] = MAX_RATE_ROWS_FOR_LLM
-    else:
-        normalized["limit"] = int(normalized["limit"])
+    normalized["limit"] = coerce_int(normalized.get("limit")) or MAX_RATE_ROWS_FOR_LLM
 
     for key in ("term_month", "duration_month", "bank_id", "user_id"):
-        if normalized.get(key) is not None:
-            normalized[key] = int(normalized[key])
+        normalized[key] = coerce_int(normalized.get(key))
 
-    for key in ("amount", "total_amount", "goal_amount", "monthly_extra"):
-        if normalized.get(key) is not None:
-            normalized[key] = float(normalized[key])
+    for key in ("amount", "total_amount", "goal_amount"):
+        normalized[key] = coerce_float(normalized.get(key))
 
     return normalized
 
 
-def extract_bank_codes_from_message(user_message: str) -> list[str]:
-    ignored_words = {
-        "LAI", "SUAT", "NGAN", "HANG", "CAO", "NHAT", "BAO", "NHIEU",
-        "HIEN", "NAY", "CUA", "KY", "HAN", "THANG", "SO", "SANH",
-        "NEU", "GUI", "TIEN", "LA", "DUOC", "SINH", "RA", "GIUA",
-    }
-    codes = []
-    for token in re.findall(r"\b[A-Za-z]{2,10}\b", user_message):
-        code = token.upper()
-        if code in ignored_words:
-            continue
-        if code not in codes:
-            codes.append(code)
-    return codes
-
-
-def extract_term_month_from_message(user_message: str) -> int | None:
-    match = re.search(r"(\d{1,2})\s*(?:tháng|thang)", user_message.lower())
-    return int(match.group(1)) if match else None
-
-
-def infer_rate_route_from_message(user_message: str) -> dict | None:
-    lowered = user_message.lower()
-    if "lãi suất" not in lowered and "lai suat" not in lowered:
-        return None
-
-    codes = extract_bank_codes_from_message(user_message)
-    sort = "list"
-    if any(keyword in lowered for keyword in ["cao nhất", "cao nhat", "tốt nhất", "tot nhat", "max"]):
-        sort = "highest"
-    elif any(keyword in lowered for keyword in ["so sánh", "so sanh"]):
-        sort = "compare"
-
-    params = normalize_router_params({
-        "codes": codes,
-        "term_month": extract_term_month_from_message(user_message),
-        "sort": sort,
-        "limit": 5 if sort == "highest" else MAX_RATE_ROWS_FOR_LLM,
-    })
-
-    return {
-        "intent": "get_rates",
-        "params": params,
-    }
-
-
-def ensure_supported_route(user_message: str, route: dict) -> dict:
-    if route.get("intent") != "out_of_scope":
-        return route
-
-    inferred_route = infer_rate_route_from_message(user_message)
-    return inferred_route or route
-
-
-def truncate_text(value: str, max_chars: int = 12000) -> str:
-    return value if len(value) <= max_chars else value[:max_chars]
-
-
-def format_history_for_router(history_messages: list[dict[str, str]]) -> str:
+def format_history_for_agent(history_messages: list[dict[str, str]]) -> str:
     if not history_messages:
         return ""
 
+    # lấy 8 tin nhắn và trả lời của user và hệ thống gần nhất
     lines = []
     for message in history_messages[-8:]:
         lines.append(f"{message['role']}: {message['content']}")
     return "\n".join(lines)
 
 
-def classify_message(user_message: str, history_messages: list[dict[str, str]] | None = None) -> dict:
-    history_text = format_history_for_router(history_messages or [])
-    user_content = (
-        f"Context hội thoại gần đây:\n{history_text}\n\n"
-        f"Prompt hiện tại: {user_message}"
-        if history_text
-        else user_message
-    )
-
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0,
-        max_tokens=600,
-    )
-    route = parse_json_object(response.choices[0].message.content)
-    route["params"] = normalize_router_params(route.get("params") or {})
-    route = ensure_supported_route(user_message, route)
-    return route
-
-
-def filter_rows_by_term(rows: list[dict], term_month: int | None) -> list[dict]:
-    if term_month is None:
-        return rows
-    return [row for row in rows if row.get("term_month") == term_month]
-
-
 def format_rate_answer(params: dict, rows: list[dict]) -> str:
     limit = min(int(params.get("limit") or MAX_RATE_ROWS_FOR_LLM), MAX_RATE_ROWS_FOR_LLM)
-    compacted = compact_rate_rows(rows, limit=limit)
+    sort = params.get("sort")
+    codes = params.get("codes") or []
+    unique_bank = sort == "highest" or len(codes) != 1
+    compacted = compact_rate_rows(rows, limit=limit, unique_bank=unique_bank)
 
     if not compacted:
         term_text = f" kỳ hạn {params.get('term_month')} tháng" if params.get("term_month") else ""
@@ -268,8 +336,6 @@ def format_rate_answer(params: dict, rows: list[dict]) -> str:
 
     best = compacted[0]
     term_text = f" kỳ hạn {params.get('term_month')} tháng" if params.get("term_month") else ""
-    sort = params.get("sort")
-    codes = params.get("codes") or []
 
     if sort == "highest":
         lines = [
@@ -282,6 +348,11 @@ def format_rate_answer(params: dict, rows: list[dict]) -> str:
             lines.append("Một vài mức cao tiếp theo:")
             for item in compacted[1:5]:
                 lines.append(f"- {item['code']}: {item['rate']}%/năm, kỳ hạn {item['term_month']} tháng")
+            second = compacted[1]
+            difference = round(float(best["rate"]) - float(second["rate"]), 2)
+            lines.append(
+                f"Chênh lệch giữa {best['code']} và {second['code']} là {difference}%/năm."
+            )
         return "\n".join(lines)
 
     if sort == "compare" or len(codes) > 1:
@@ -294,8 +365,43 @@ def format_rate_answer(params: dict, rows: list[dict]) -> str:
 
     if sort == "compare" or len(codes) > 1:
         lines.append(f"Kết luận: {best['code']} đang có lãi suất cao nhất trong nhóm trên.")
+        if len(compacted) > 1:
+            second = compacted[1]
+            difference = round(float(best["rate"]) - float(second["rate"]), 2)
+            lines.append(
+                f"Chênh lệch giữa {best['code']} và {second['code']} là {difference}%/năm."
+            )
 
     return "\n".join(lines)
+
+
+def polish_backend_answer(user_message: str, backend_answer: str) -> str:
+    try:
+        response = create_chat_completion_with_retry(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Bạn chỉ biên tập câu trả lời tiếng Việt cho tự nhiên hơn. "
+                        "Không thêm, không bỏ, không đổi bất kỳ số liệu, mã ngân hàng, kỳ hạn, "
+                        "thứ hạng, kết luận hoặc chênh lệch nào. Nếu không chắc, trả lại nguyên văn."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Câu hỏi người dùng: {user_message}\n"
+                        f"Câu trả lời backend cần giữ nguyên dữ liệu:\n{backend_answer}"
+                    ),
+                },
+            ],
+            initial_temperature=0,
+        )
+    except Exception:
+        return backend_answer
+
+    polished = (response.choices[0].message.content or "").strip()
+    return polished or backend_answer
 
 
 def format_calculate_interest_answer(result: dict) -> str:
@@ -328,48 +434,6 @@ def format_saving_plan_answer(result: dict) -> str:
     )
 
 
-def generate_natural_answer(
-        user_message: str,
-        route: dict,
-        result_context: dict,
-        history_messages: list[dict[str, str]] | None = None,
-) -> str:
-    if route.get("intent") == "out_of_scope":
-        return OUT_OF_SCOPE_ANSWER
-
-    compact_context = truncate_text(
-        json.dumps(result_context, ensure_ascii=False, default=json_default),
-        max_chars=12000,
-    )
-
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Bạn là trợ lý tài chính ngân hàng. Viết câu trả lời tự nhiên bằng tiếng Việt "
-                    "dựa duy nhất trên JSON context. Không bịa số liệu. Nếu context có missing_fields, "
-                    "hãy hỏi người dùng bổ sung đúng trường còn thiếu. Trả lời ngắn gọn."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Prompt gốc: {user_message}\n"
-                    f"Context hội thoại: {format_history_for_router(history_messages or [])}\n"
-                    f"Route: {json.dumps(route, ensure_ascii=False, default=json_default)}\n"
-                    f"Context: {compact_context}"
-                ),
-            },
-        ],
-        temperature=0.2,
-        max_tokens=ANSWER_MAX_TOKENS,
-    )
-
-    return response.choices[0].message.content or OUT_OF_SCOPE_ANSWER
-
-
 def fallback_context_answer(result_context: dict) -> str:
     if result_context.get("fallback_answer"):
         return result_context["fallback_answer"]
@@ -386,27 +450,6 @@ def fallback_context_answer(result_context: dict) -> str:
         return result_context["message"]
 
     return OUT_OF_SCOPE_ANSWER
-
-
-async def safe_get_rates(bank_service: BankService, args: dict):
-
-    code = args.get("code")
-    name = args.get("name")
-    bank_type = args.get("type")
-
-    norm = {
-        "code": code.strip().upper() if code else None,
-        "name": f"%{name.strip()}%" if name else None,
-        "type": f"%{bank_type.strip().upper()}%" if bank_type else None
-    }
-
-    result = await bank_service.get_all_banks_and_rates_for_chat_bot(**norm)
-
-    if not result and norm["name"]:
-        fallback_args = {**norm, "code": None}
-        result = await bank_service.get_all_banks_and_rates_for_chat_bot(**fallback_args)
-
-    return result
 
 
 def resolve_bank_id(session: Session, bank_id: int | None, bank_code: str | None, bank_name: str | None) -> int | None:
@@ -438,11 +481,10 @@ def calculate_deposit_interest(session: Session, bank_service: BankService, args
 
     if not resolved_bank_id:
         return {
-            "error": "Không tìm thấy ngân hàng phù hợp. Vui lòng cung cấp bank_id hoặc mã ngân hàng chính xác."
+            "error": "Không tìm thấy ngân hàng phù hợp. Vui lòng cung cấp mã hoặc tên ngân hàng chính xác."
         }
 
-    deposit_date_arg = args.get("deposit_date")
-    deposit_date = date.fromisoformat(deposit_date_arg) if deposit_date_arg else date.today()
+    deposit_date = parse_iso_date(args.get("deposit_date")) or date.today()
 
     request = InterestCalculateRequest(
         bank_id=resolved_bank_id,
@@ -455,101 +497,6 @@ def calculate_deposit_interest(session: Session, bank_service: BankService, args
     return bank_service.calculate_interest(request).model_dump()
 
 
-def compare_bank_interest(session: Session, bank_service: BankService, args: dict) -> dict:
-    codes = args.get("codes") or []
-    bank_names = args.get("bank_names") or []
-    term_month = args.get("term_month")
-    amount = args.get("amount")
-    channel = (args.get("channel") or "ONLINE").upper()
-    deposit_date_arg = args.get("deposit_date")
-    deposit_date = date.fromisoformat(deposit_date_arg) if deposit_date_arg else date.today()
-
-    if len(codes) + len(bank_names) < 2:
-        return {
-            "error": "Cần ít nhất 2 ngân hàng để so sánh tiền lãi."
-        }
-
-    missing_fields = []
-    if term_month is None:
-        missing_fields.append("term_month")
-    if amount is None:
-        missing_fields.append("amount")
-
-    if missing_fields:
-        return {
-            "missing_fields": missing_fields,
-            "message": "Cần bổ sung kỳ hạn và số tiền gửi để tính tiền lãi giữa hai ngân hàng.",
-        }
-
-    first_bank = {
-        "code": codes[0] if len(codes) > 0 else None,
-        "name": bank_names[0] if len(bank_names) > 0 else None,
-    }
-    second_bank = {
-        "code": codes[1] if len(codes) > 1 else None,
-        "name": bank_names[1] if len(bank_names) > 1 else None,
-    }
-
-    first_bank_id = resolve_bank_id(session, None, first_bank["code"], first_bank["name"])
-    second_bank_id = resolve_bank_id(session, None, second_bank["code"], second_bank["name"])
-
-    if not first_bank_id or not second_bank_id:
-        return {
-            "error": "Không tìm thấy đủ thông tin ngân hàng để so sánh.",
-            "banks": [first_bank, second_bank],
-        }
-
-    first_request = InterestCalculateRequest(
-        bank_id=first_bank_id,
-        channel=channel,
-        term_month=term_month,
-        amount=amount,
-        deposit_date=deposit_date,
-    )
-    try:
-        first_result = bank_service.calculate_interest(first_request).model_dump()
-    except Exception as e:
-        return {
-            "error": f"Không tính được tiền lãi cho ngân hàng thứ nhất: {e}",
-            "banks": [first_bank, second_bank],
-        }
-
-    second_request = CompareCalculateRequest(
-        bank_id=second_bank_id,
-        channel=channel,
-        term_month=term_month,
-        amount=amount,
-        deposit_date=deposit_date,
-        previous_result=first_result["total_amount"],
-    )
-    try:
-        second_result = bank_service.compare_calculate_interest(second_request).model_dump()
-    except Exception as e:
-        return {
-            "error": f"Không tính được tiền lãi cho ngân hàng thứ hai: {e}",
-            "banks": [first_bank, second_bank],
-            "first_bank_result": first_result,
-        }
-
-    return {
-        "amount": amount,
-        "term_month": term_month,
-        "channel": channel,
-        "deposit_date": deposit_date,
-        "first_bank": first_result,
-        "second_bank": second_result,
-        "better_bank": (
-            first_result["bank_name"]
-            if first_result["total_amount"] >= second_result["total_amount"]
-            else second_result["bank_name"]
-        ),
-        "difference_total_amount": abs(second_result["compare_result"]),
-        "difference_interest_amount": abs(
-            second_result["interest_amount"] - first_result["interest_amount"]
-        ),
-    }
-
-
 def create_saving_plan(saving_plan_service: SavingPlanService, args: dict):
     duration_month = args["duration_month"]
     total_amount = args["total_amount"]
@@ -560,12 +507,7 @@ def create_saving_plan(saving_plan_service: SavingPlanService, args: dict):
         duration_month=duration_month,
         total_amount=total_amount,
         goal_amount=goal_amount,
-        monthly_extra=args.get("monthly_extra") or 0,
-        extra_schedule=args.get("extra_schedule") or [],
-        withdrawal_schedule=args.get("withdrawal_schedule") or [],
         prefer_rate=(args.get("prefer_rate") or "ONLINE").upper(),
-        risk_tolerance=(args.get("risk_tolerance") or "low").lower(),
-        algorithm_used=(args.get("algorithm_used") or "dp").lower(),
         codes=[code.strip().upper() for code in (args.get("codes") or []) if code],
         notes=args.get("notes"),
     )
@@ -583,19 +525,28 @@ async def execute_function_call(
     if intent == "get_rates":
         codes = params.get("codes") or []
         names = params.get("bank_names") or []
-        if params.get("name"):
+        if params.get("name") and params["name"] not in names:
             names.append(params["name"])
         if params.get("code") and params["code"] not in codes:
             codes.append(params["code"])
 
-        rows = bank_service.get_rates_for_chatbot(
-            codes=codes,
-            names=names,
-            term_month=params.get("term_month"),
-            channel=params.get("channel"),
-            amount=params.get("amount"),
-            limit=min(params.get("limit") or MAX_RATE_ROWS_FOR_LLM, MAX_RATE_ROWS_FOR_LLM),
-        )
+        limit = min(params.get("limit") or MAX_RATE_ROWS_FOR_LLM, MAX_RATE_ROWS_FOR_LLM)
+        if params.get("sort") == "highest" and not codes and not names:
+            rows = bank_service.get_top_rates_for_chatbot(
+                term_month=params.get("term_month"),
+                channel=params.get("channel"),
+                amount=params.get("amount"),
+                limit=limit,
+            )
+        else:
+            rows = bank_service.get_rates_for_chatbot(
+                codes=codes,
+                names=names,
+                term_month=params.get("term_month"),
+                channel=params.get("channel"),
+                amount=params.get("amount"),
+                limit=limit,
+            )
         return {
             "type": "rate_lookup",
             "params": params,
@@ -604,11 +555,19 @@ async def execute_function_call(
         }
 
     if intent == "calculate_deposit_interest":
+        missing_fields = []
+        if not any([params.get("bank_id"), params.get("bank_code"), params.get("bank_name")]):
+            missing_fields.append("bank")
+        if params.get("term_month") is None:
+            missing_fields.append("term_month")
         if params.get("amount") is None:
+            missing_fields.append("amount")
+
+        if missing_fields:
             return {
                 "type": "calculate_deposit_interest",
-                "missing_fields": ["amount"],
-                "message": "Cần số tiền gửi để tính tiền lãi.",
+                "missing_fields": missing_fields,
+                "message": "Cần ngân hàng, kỳ hạn và số tiền gửi để tính tiền lãi.",
             }
         try:
             result = calculate_deposit_interest(session, bank_service, params)
@@ -622,8 +581,7 @@ async def execute_function_call(
         }
 
     if intent == "compare_bank_interest":
-        deposit_date_arg = params.get("deposit_date")
-        deposit_date_value = date.fromisoformat(deposit_date_arg) if deposit_date_arg else None
+        deposit_date_value = parse_iso_date(params.get("deposit_date"))
         result = bank_service.compare_interest_for_chatbot(
             codes=params.get("codes") or [],
             names=params.get("bank_names") or [],
@@ -639,7 +597,23 @@ async def execute_function_call(
         }
 
     if intent == "create_saving_plan":
-        result = create_saving_plan(saving_plan_service, params)
+        missing_fields = []
+        if params.get("duration_month") is None:
+            missing_fields.append("duration_month")
+        if params.get("total_amount") is None:
+            missing_fields.append("total_amount")
+
+        if missing_fields:
+            return {
+                "type": "create_saving_plan",
+                "missing_fields": missing_fields,
+                "message": "Cần thời gian kế hoạch và số tiền ban đầu để lập kế hoạch tiết kiệm.",
+            }
+
+        try:
+            result = create_saving_plan(saving_plan_service, params)
+        except Exception as e:
+            result = {"error": str(e)}
         return {
             "type": "create_saving_plan",
             "params": params,
@@ -651,6 +625,155 @@ async def execute_function_call(
         "type": "out_of_scope",
         "message": OUT_OF_SCOPE_ANSWER,
     }
+
+
+
+def build_agent_messages(
+        user_message: str,
+        history_messages: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    # build message bao gồm 3 phần hệ thống, lịch sử, hiện tại
+    messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+    history_text = format_history_for_agent(history_messages or [])
+    if history_text:
+        messages.append({
+            "role": "system",
+            "content": f"Context hội thoại gần đây:\n{history_text}",
+        })
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
+def assistant_tool_call_message(response_message) -> dict:
+    return {
+        "role": "assistant",
+        "content": response_message.content,
+        "tool_calls": [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+            for tool_call in response_message.tool_calls or []
+        ],
+    }
+
+
+async def execute_tool_arguments(
+        function_name: str,
+        arguments: dict,
+        session: Session,
+        bank_service: BankService,
+        saving_plan_service: SavingPlanService,
+        tool_call_id: str | None = None,
+) -> dict:
+    params = normalize_tool_params(arguments)
+    result = await execute_function_call(
+        function_name,
+        params,
+        session,
+        bank_service,
+        saving_plan_service,
+    )
+    return {
+        "tool_call_id": tool_call_id,
+        "name": function_name,
+        "arguments": params,
+        "result": result,
+    }
+
+
+async def execute_tool_call(
+        tool_call,
+        session: Session,
+        bank_service: BankService,
+        saving_plan_service: SavingPlanService,
+) -> dict:
+    function_name = tool_call.function.name
+    try:
+        arguments = json.loads(tool_call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        arguments = {}
+
+    return await execute_tool_arguments(
+        function_name,
+        arguments,
+        session,
+        bank_service,
+        saving_plan_service,
+        tool_call_id=tool_call.id,
+    )
+
+
+async def run_tool_calling_agent(
+        user_message: str,
+        history_messages: list[dict[str, str]],
+        session: Session,
+        bank_service: BankService,
+        saving_plan_service: SavingPlanService,
+) -> tuple[str, list[dict]]:
+    messages = build_agent_messages(user_message, history_messages)
+    print(f"messages: {messages}")
+    tool_results = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        try:
+            response = create_chat_completion_with_retry(
+                messages=messages,
+                use_tools=True,
+                retry_system_prompt=TOOL_RETRY_SYSTEM_PROMPT,
+            )
+        except Exception as e:
+            recovered_tool = parse_failed_tool_generation(e)
+            if not recovered_tool:
+                raise
+
+            function_name, arguments = recovered_tool
+            print(f"[Recovered malformed tool call] {function_name}: {arguments}")
+            tool_result = await execute_tool_arguments(
+                function_name,
+                arguments,
+                session,
+                bank_service,
+                saving_plan_service,
+                tool_call_id="recovered_tool_call",
+            )
+            tool_results.append(tool_result)
+            if tool_result["result"].get("fallback_answer"):
+                return polish_backend_answer(user_message, tool_result["result"]["fallback_answer"]), tool_results
+            return fallback_context_answer(tool_result["result"]), tool_results
+
+        response_message = response.choices[0].message
+
+        print(f"response: {response_message}")
+
+        if not response_message.tool_calls:
+            return response_message.content or OUT_OF_SCOPE_ANSWER, tool_results
+
+        messages.append(assistant_tool_call_message(response_message))
+
+        for tool_call in response_message.tool_calls:
+
+            print(f"tool_call: {tool_call}")
+            tool_result = await execute_tool_call(
+                tool_call,
+                session,
+                bank_service,
+                saving_plan_service,
+            )
+            tool_results.append(tool_result)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
+            })
+            if tool_result["result"].get("fallback_answer"):
+                return polish_backend_answer(user_message, tool_result["result"]["fallback_answer"]), tool_results
+
+    return fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER, tool_results
 
 
 async def run_agent(
@@ -675,35 +798,27 @@ async def run_agent(
         if use_context:
             conversation = conversation_service.get_or_create_user_conversation(
                 user_id=user_id,
-                title=user_message[:80],
+                title=user_message[:240],
             )
             history_messages = conversation_service.build_context_messages(conversation.id, limit=20)
             conversation_service.add_user_message(conversation.id, user_message)
 
-        route = classify_message(user_message, history_messages)
-        print(f"\n[Router] {route}")
-        result_context = await execute_function_call(
-            route.get("intent", "out_of_scope"),
-            route.get("params") or {},
+        answer, tool_results = await run_tool_calling_agent(
+            user_message,
+            history_messages,
             session,
             bank_service,
             saving_plan_service,
         )
-        print(f"\n[Function Result] {json.dumps(result_context, ensure_ascii=False, default=json_default)}")
-        try:
-            answer = generate_natural_answer(user_message, route, result_context, history_messages)
-        except Exception as e:
-            print(f"[Answer Generation Error] {e}")
-            answer = fallback_context_answer(result_context)
+        print(f"\n[Tool Results] {json.dumps(tool_results, ensure_ascii=False, default=json_default)}")
 
         if use_context and conversation:
             conversation_service.add_assistant_message(
                 conversation.id,
                 answer,
-                intent=route.get("intent"),
+                intent=tool_results[-1]["name"] if tool_results else "out_of_scope",
                 message_metadata=to_jsonable({
-                    "route": route,
-                    "result_context": result_context,
+                    "tool_results": tool_results,
                 }),
             )
             conversation_service.commit()
@@ -718,3 +833,176 @@ async def run_agent(
         "conversation_id": conversation.id if conversation else None,
         "answer": answer,
     }
+
+
+async def stream_agent_answer(
+        user_message: str,
+        session,
+        user_id: int | None = None,
+        use_context: bool = True,
+) -> AsyncGenerator[str, None]:
+    bank_service = BankService(session)
+    saving_plan_service = SavingPlanService(session)
+    conversation_service = ChatbotConversationService(session)
+
+    conversation = None
+    history_messages = []
+    tool_results = []
+    answer_parts = []
+    answer = ""
+
+    try:
+        if use_context:
+            conversation = conversation_service.get_or_create_user_conversation(
+                user_id=user_id,
+                title=user_message[:240],
+            )
+            history_messages = conversation_service.build_context_messages(conversation.id, limit=20)
+            conversation_service.add_user_message(conversation.id, user_message)
+
+        messages = build_agent_messages(user_message, history_messages)
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            try:
+                response = create_chat_completion_with_retry(
+                    messages=messages,
+                    use_tools=True,
+                    retry_system_prompt=TOOL_RETRY_SYSTEM_PROMPT,
+                )
+            except Exception as e:
+                recovered_tool = parse_failed_tool_generation(e)
+                if not recovered_tool:
+                    raise
+
+                function_name, arguments = recovered_tool
+                tool_result = await execute_tool_arguments(
+                    function_name,
+                    arguments,
+                    session,
+                    bank_service,
+                    saving_plan_service,
+                    tool_call_id="recovered_tool_call",
+                )
+                tool_results.append(tool_result)
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "recovered_tool_call",
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": json.dumps(arguments, ensure_ascii=False, default=json_default),
+                            },
+                        }
+                    ],
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": "recovered_tool_call",
+                    "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
+                })
+                try:
+                    stream = create_chat_completion_stream(messages)
+                    for chunk in iter_stream_content_chunks(stream):
+                        answer_parts.append(chunk)
+                        yield encode_stream_event("chunk", {
+                            "conversation_id": conversation.id if conversation else None,
+                            "chunk": chunk,
+                        })
+                        await asyncio.sleep(0)
+                    answer = "".join(answer_parts).strip()
+                except Exception as stream_error:
+                    print(f"[Recovered Tool Final Stream Error] {stream_error}")
+                    answer = tool_result["result"].get("fallback_answer") or fallback_context_answer(tool_result["result"])
+                break
+
+            response_message = response.choices[0].message
+            if not response_message.tool_calls:
+                try:
+                    stream = create_chat_completion_stream(messages)
+                    for chunk in iter_stream_content_chunks(stream):
+                        answer_parts.append(chunk)
+                        yield encode_stream_event("chunk", {
+                            "conversation_id": conversation.id if conversation else None,
+                            "chunk": chunk,
+                        })
+                        await asyncio.sleep(0)
+                    answer = "".join(answer_parts).strip()
+                except Exception as e:
+                    print(f"[Stream Generation Error] {e}")
+                    answer = response_message.content or OUT_OF_SCOPE_ANSWER
+                if not answer:
+                    answer = response_message.content or OUT_OF_SCOPE_ANSWER
+                break
+
+            messages.append(assistant_tool_call_message(response_message))
+
+            for tool_call in response_message.tool_calls:
+                tool_result = await execute_tool_call(
+                    tool_call,
+                    session,
+                    bank_service,
+                    saving_plan_service,
+                )
+                tool_results.append(tool_result)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
+                })
+
+            try:
+                stream = create_chat_completion_stream(messages)
+                for chunk in iter_stream_content_chunks(stream):
+                    answer_parts.append(chunk)
+                    yield encode_stream_event("chunk", {
+                        "conversation_id": conversation.id if conversation else None,
+                        "chunk": chunk,
+                    })
+                    await asyncio.sleep(0)
+                answer = "".join(answer_parts).strip()
+            except Exception as e:
+                print(f"[Tool Final Stream Error] {e}")
+                answer = fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER
+            break
+
+        if not answer:
+            answer = fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER
+
+        if not answer_parts:
+            for chunk in split_text_chunks(answer):
+                answer_parts.append(chunk)
+                yield encode_stream_event("chunk", {
+                    "conversation_id": conversation.id if conversation else None,
+                    "chunk": chunk,
+                })
+                await asyncio.sleep(0.02)
+
+        if use_context and conversation:
+            conversation_service.add_assistant_message(
+                conversation.id,
+                answer,
+                intent=tool_results[-1]["name"] if tool_results else "out_of_scope",
+                message_metadata=to_jsonable({
+                    "tool_results": tool_results,
+                }),
+            )
+            conversation_service.commit()
+    except Exception as e:
+        print(f"[Stream Agent Error] {e}")
+        conversation_service.rollback()
+        conversation = None
+        answer = OUT_OF_SCOPE_ANSWER
+        for chunk in split_text_chunks(answer):
+            yield encode_stream_event("chunk", {
+                "conversation_id": None,
+                "chunk": chunk,
+            })
+            await asyncio.sleep(0.02)
+
+    yield encode_stream_event("done", {
+        "conversation_id": conversation.id if conversation else None,
+        "answer": answer,
+    })

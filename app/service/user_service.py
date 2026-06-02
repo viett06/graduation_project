@@ -18,29 +18,75 @@ class UserService:
         self.__userRepository = UserRepository(session=session)
         self.redis = redis_client
 
-
-    async def create_user(self, user_data: UserCreate, background_tasks: BackgroundTasks)-> User:
-
-        if self.__userRepository.get_by_email(user_data.email):
-            raise ValueError("Email already registered")
-
+    async def create_user(self, user_data: UserCreate, background_tasks: BackgroundTasks) -> User:
+        existing_user = self.__userRepository.get_by_email(user_data.email)
         hashed_password = AuthHandler.get_password_hash(user_data.password)
 
-        # set role
+        if existing_user:
+            if existing_user.is_active:
+                raise ValueError("Email already registered")
 
-        user = User(
-            email=user_data.email,
-            first_name=user_data.first_name,
-            last_name=user_data.last_name,
-            hashed_password=hashed_password,
-            is_active= False
+            existing_user.first_name = user_data.first_name
+            existing_user.last_name = user_data.last_name
+            existing_user.hashed_password = hashed_password
+
+            user = self.__userRepository.update(existing_user)
+        else:
+            user = User(
+                email=user_data.email,
+                first_name=user_data.first_name,
+                last_name=user_data.last_name,
+                hashed_password=hashed_password,
+                is_active=False,
+            )
+            user = self.__userRepository.create(user)
+
+        await self.send_otp(
+            email=user.email,
+            type_send="create_user",
+            background_tasks=background_tasks,
         )
 
-        self.__userRepository.create(user)
-
-        await self.send_otp(email=user.email,type_send= "create_user", background_tasks=background_tasks)
-
         return user
+
+    # async def create_user(self, user_data: UserCreate, background_tasks: BackgroundTasks)-> User:
+    #
+    #     if not self.__userRepository.get_by_email(user_data.email):
+    #         if self.__userRepository.get_by_email_is_unactive(user_data.email):
+    #             raise HTTPException(status_code=400, detail="Email đã tồn tại dưới dạng chưa kích hoạt. Vui lòng kiểm tra email để kích hoạt tài khoản hoặc liên hệ hỗ trợ.")
+    #         hashed_password = AuthHandler.get_password_hash(user_data.password)
+    #
+    #         # set role
+    #
+    #         user = User(
+    #             email=user_data.email,
+    #             first_name=user_data.first_name,
+    #             last_name=user_data.last_name,
+    #             hashed_password=hashed_password,
+    #             is_active=False
+    #         )
+    #
+    #         self.__userRepository.create(user)
+    #
+    #         await self.send_otp(email=user.email, type_send="create_user", background_tasks=background_tasks)
+    #
+    #         return user
+    #
+    #     elif self.__userRepository.get_by_email_is_unactive(user_data.email):
+    #
+    #         user = self.__userRepository.get_by_email_is_unactive(user_data.email)
+    #
+    #         hashed_password = AuthHandler.get_password_hash(user_data.password)
+    #
+    #         user.first_name = user_data.first_name
+    #         user.last_name = user_data.last_name
+    #         user.hashed_password = hashed_password
+    #
+    #         self.__userRepository.update(user)
+    #
+    #         await self.send_otp(email=user.email, type_send="create_user", background_tasks=background_tasks)
+    #
+    #         return user
 
 
 

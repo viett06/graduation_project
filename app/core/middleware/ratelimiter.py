@@ -1,239 +1,229 @@
+import hashlib
 import time
-import json
+import uuid
+from dataclasses import dataclass
+from typing import Any
 
-
-from fastapi import FastAPI, Request
+import jwt
+from fastapi import Request
 from fastapi.responses import JSONResponse
-from fastapi.concurrency import run_in_threadpool
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-from app.core.redis.redis_config import redis_client
-from app.db.session import SessionLocal
-from app.models.rate_limit import RateLimit
-
-app = FastAPI()
-
-def _get_db_config(path: str,method: str, session: Session):
-    #hreadpool
-    result = session.execute(
-        select(RateLimit).filter_by(path=path, method = method).limit(1)
-    )
-    return result.scalar_one_or_none()
-
-async def _get_rate_limit_config(redis, path: str,method: str, session: Session) -> dict | None:
-    cache_key = f"rate_limit_config:{path}"
-
-    cached = await redis.get(cache_key)
-    if cached:
-        return json.loads(cached)
-        # return RateLimit(**data)
-
-    config = await run_in_threadpool(_get_db_config, path,method, session)
+from app.core.config import settings
+from app.core.redis import redis_config
+from app.core.security.rbac import RoleEnum
 
 
-    if config:
+SLIDING_WINDOW_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window_start = tonumber(ARGV[2])
+local max_requests = tonumber(ARGV[3])
+local window_time = tonumber(ARGV[4])
+local unique_id = ARGV[5]
 
-        data = {
-            "rate_limit_capacity": float(config.rate_limit_capacity),
-            "refill_rate": float(config.refill_rate),
-            "max_limit_second": config.max_limit_second,
-            "window_time": config.window_time,
-            "max_limit_minutes": config.max_limit_minutes,
-        }
-        await redis.set(cache_key, json.dumps(data), ex=60)
-        return data
-    return None
+redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
+local count = redis.call('ZCARD', key)
 
-async def _build_key(request: Request, config: dict |None) -> str:
+if count >= max_requests then
+    return 1
+end
 
-    client_ip = request.client.host
-    method = request.method
-    if config is not None:
-        return f"{method}:{request.url.path}:{client_ip}"
-    return client_ip
+redis.call('ZADD', key, now, unique_id)
+redis.call('EXPIRE', key, window_time + 1)
+return 0
+"""
 
-async def _consume_token_capacity(redis, key: str, capacity: float, refill_rate: float, max_limit: int)-> bool:
-    now = time.time()
 
-    pipe = redis.pipeline()
-    pipe.get(f"cap_token:{key}")
-    pipe.get(f"cap_last_updated:{key}")
-    raw_tokens, row_last_updated = await pipe.execute()
+TOKEN_BUCKET_LUA = """
+local key      = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local rate     = tonumber(ARGV[2])
 
-    if raw_tokens is not None:
-        existing_tokens = float(raw_tokens)
+local time_parts = redis.call('TIME')
+local now = tonumber(time_parts[1]) + tonumber(time_parts[2]) / 1e6
 
-    else:
-        existing_tokens = capacity
+local bucket   = redis.call('HMGET', key, 'tokens', 'last_refill')
+local tokens   = tonumber(bucket[1]) or capacity
+local last     = tonumber(bucket[2]) or now
 
-    if row_last_updated is not None:
-        row_last_updated = float(row_last_updated)
-    else:
-        row_last_updated = now
+local elapsed  = now - last
+local refilled = math.min(capacity, tokens + elapsed * rate)
+local ttl      = math.ceil(capacity / rate) + 60
 
-    elapsed = now - float(row_last_updated)
+if refilled >= 1 then
+    redis.call('HMSET', key, 'tokens', refilled - 1, 'last_refill', now)
+    redis.call('EXPIRE', key, ttl)
+    return 0
+else
+    redis.call('HMSET', key, 'tokens', refilled, 'last_refill', now)
+    redis.call('EXPIRE', key, ttl)
+    return 1
+end
+"""
 
-    refilled_tokens = existing_tokens + (elapsed * refill_rate)
 
-    current_tokens = min(capacity, refilled_tokens)
+@dataclass(frozen=True)
+class RateLimitPolicy:
+    capacity: float
+    refill_rate: float
+    max_requests: int
+    window_time: int
 
-    if current_tokens >= 1:
-        current_tokens -=1
-        pipe = redis.pipeline()
-        pipe.set(f"cap_token:{key}", current_tokens)
-        pipe.set(f"cap_last_updated:{key}", now)
-        await pipe.execute()
 
-        return False
+RATE_LIMIT_POLICIES: dict[str, RateLimitPolicy] = {
+    "guest": RateLimitPolicy(capacity=5, refill_rate=0.2, max_requests=20, window_time=60),
+    "user": RateLimitPolicy(capacity=30, refill_rate=1.0, max_requests=120, window_time=60),
+    "admin": RateLimitPolicy(capacity=100, refill_rate=5.0, max_requests=600, window_time=60),
+}
 
-    return True
+PUBLIC_PATH_PREFIXES = (
+    "/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
 
-async def _consume_token_max_limit(redis, key: str, capacity: float, refill_rate: float, max_limit: int)-> bool:
-    now = time.time()
 
-    pipe = redis.pipeline()
-    pipe.get(f"max_token:{key}")
-    pipe.get(f"max_last_updated:{key}")
-    raw_tokens, row_last_updated = await pipe.execute()
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
 
-    if raw_tokens is not None:
-        existing_tokens = float(raw_tokens)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
 
-    else:
-        existing_tokens = float(max_limit)
+    return request.client.host if request.client else "unknown"
 
-    if row_last_updated is not None:
-       row_last_updated = float(row_last_updated)
-    else:
-        row_last_updated = now
 
-    elapsed = now - float(row_last_updated)
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    refilled_tokens = existing_tokens + (elapsed * refill_rate)
 
-    current_tokens = min(float(max_limit), refilled_tokens)
+def _extract_bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
 
-    if current_tokens >= 1:
-        current_tokens -=1
-        pipe = redis.pipeline()
-        pipe.set(f"max_token:{key}", current_tokens)
-        pipe.set(f"max_last_updated:{key}", now)
-        await pipe.execute()
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
 
-        return False
+    return token.strip()
 
-    return True
+
+def _decode_access_token(token: str) -> dict[str, Any] | None:
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+    except jwt.PyJWTError:
+        return None
+
+    if payload.get("type") != "access":
+        return None
+
+    return payload
+
+
+def _role_scope(payload: dict[str, Any] | None) -> str:
+    roles = payload.get("roles", []) if payload else []
+
+    if RoleEnum.ADMIN.value in roles:
+        return "admin"
+
+    return "user"
+
+
+def _rate_limit_identity(request: Request) -> tuple[str, str]:
+    token = _extract_bearer_token(request)
+    if not token:
+        return "guest", f"ip:{_client_ip(request)}"
+
+    payload = _decode_access_token(token)
+    if not payload:
+        return "guest", f"ip:{_client_ip(request)}"
+
+    user_id = payload.get("user_id") or payload.get("sub")
+    role_scope = _role_scope(payload)
+
+    if user_id is None:
+        return role_scope, f"token:{_hash_token(token)}"
+
+    return role_scope, f"user:{user_id}"
+
+
+def _build_key(role_scope: str, identity: str) -> str:
+    return f"rate_limit:{role_scope}:{identity}"
+
+
+def _is_public_path(path: str) -> bool:
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in PUBLIC_PATH_PREFIXES)
 
 
 async def _consume_sliding_window(redis, key: str, max_requests: int, window_time: int) -> bool:
-    window_key = f"window:{key}"
     now = time.time()
-    window_start = now - window_time
+    result = await redis.eval(
+        SLIDING_WINDOW_LUA,
+        1,
+        f"window:{key}",
+        now,
+        now - window_time,
+        max_requests,
+        window_time,
+        str(uuid.uuid4()),
+    )
+    return bool(result)
 
-    pipe = redis.pipeline()
-    pipe.zremrangebyscore(window_key, 0, window_start)
-    pipe.zcard(window_key)
-    results = await pipe.execute()
 
-    current_count = results[1] #result zcard
+async def _consume_token_bucket(redis, key: str, capacity: float, refill_rate: float) -> bool:
+    result = await redis.eval(
+        TOKEN_BUCKET_LUA,
+        1,
+        f"bucket:{key}",
+        capacity,
+        refill_rate,
+    )
+    return bool(result)
 
-    if current_count >= max_requests:
+
+async def _is_rate_limited(request: Request) -> bool:
+    redis = redis_config.redis_client
+    if redis is None:
+        return False
+
+    role_scope, identity = _rate_limit_identity(request)
+    policy = RATE_LIMIT_POLICIES.get(role_scope, RATE_LIMIT_POLICIES["guest"])
+    key = _build_key(role_scope, identity)
+
+    window_limited = await _consume_sliding_window(
+        redis,
+        key,
+        policy.max_requests,
+        policy.window_time,
+    )
+    if window_limited:
         return True
 
-    pipe = redis.pipeline()
-    pipe.zadd(window_key, {str(now): now})
-    pipe.expire(window_key, window_time + 1)
-    await pipe.execute()
+    return await _consume_token_bucket(
+        redis,
+        key,
+        policy.capacity,
+        policy.refill_rate,
+    )
 
-    return False
 
-async def _is_rate_limited(capacity: float, refill_rate: float, max_request: int,max_limit: int, window_time: int, request: Request, config: dict | None) -> bool:
-
-    redis = redis_client
-
-    # rateLimited = await _get_rate_limit_config(str(request.url.path), session)
-    key = await _build_key(request, config)
-
-    if config is None:
-        return await _consume_token_capacity(redis, key, capacity, refill_rate, max_limit)
-
-    else:
-        return await _consume_sliding_window(redis, key, max_request, window_time) or await _consume_token_max_limit(redis, key, capacity, refill_rate, max_limit)
-
-@app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    path = request.url.path
-    method = request.method
-    redis = redis_client
-    limited = False
+    if request.method == "OPTIONS" or _is_public_path(request.url.path):
+        return await call_next(request)
 
-    session = SessionLocal()
     try:
-            # if not hasattr(request.app.state, "global_rate_limit_capacity"):
-            #     cap_query = select(RateLimit.rate_limit_capacity).limit(1)
-            #     ref_query = select(RateLimit.refill_rate).limit(1)
-            #
-            #     cap_result = await session.execute(cap_query)
-            #     ref_result = await session.execute(ref_query)
-            #
-            #     rate_limit_capacity = cap_result.scalar_one_or_none()
-            #     rate_limit_refill_rate = ref_result.scalar_one_or_none()
-            #
-            #     if rate_limit_capacity is not None:
-            #         request.app.state.global_rate_limit_capacity = float(rate_limit_capacity)
-            #     else:
-            #         request.app.state.global_rate_limit_capacity = 10
-            #
-            #     request.app.state.global_rate_limit_refill_rate = (
-            #         float(rate_limit_refill_rate) if rate_limit_refill_rate is not None else 1.0
-            #     )
-            #
-            #
-            # capacity = request.app.state.global_rate_limit_capacity
-            # refill_rate = request.app.state.global_rate_limit_refill_rate
-            #
-            # if not hasattr(request.app.state, "rate_limit_cache"):
-            #     request.app.state.rate_limit_cache = {}
-            #
-            # if path in request.app.state.rate_limit_cache:
-            #     rateLimited = request.app.state.rate_limit_cache[path]
-            # else:
-            #     rateLimited = await _get_rate_limit_config(path, session)
-            #     request.app.state.rate_limit_cache[path] = rateLimited
-
-            print(f"DEBUG: Request Path: {path}")
-            rateLimited = await _get_rate_limit_config(redis, path, method, session)
-            print(f"DEBUG: Request Path: {path}")
-
-            if rateLimited is None:
-                capacity = 10.0
-                refill_rate = 1.0
-                rate_limit_max_second = 0
-                window_time = 0
-                max_request = 0
-            else:
-                capacity = rateLimited["rate_limit_capacity"]
-                refill_rate = rateLimited["refill_rate"]
-                rate_limit_max_second = rateLimited["max_limit_second"]
-                window_time = rateLimited["window_time"]
-                max_request = rateLimited["max_limit_minutes"]
-
-            limited = await _is_rate_limited(
-                capacity,
-                refill_rate,
-                max_request,
-                rate_limit_max_second,
-                window_time,
-                request,
-                rateLimited
-            )
-    except Exception as e:
-        print(f"Rate limit error: {e}")
+        limited = await _is_rate_limited(request)
+    except Exception as exc:
+        print(f"Rate limit error: {exc}")
         limited = False
-
-    finally:
-        session.close()
 
     if limited:
         return JSONResponse(
@@ -243,4 +233,3 @@ async def rate_limit_middleware(request: Request, call_next):
         )
 
     return await call_next(request)
-
