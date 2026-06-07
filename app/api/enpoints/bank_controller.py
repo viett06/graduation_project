@@ -34,7 +34,7 @@ async def read_bank_rates(
         amount: float = 0,
         type: str = None,
     page: int = 1,
-    size: int = 10,
+    size: int =30,
         session: Session = Depends(get_db),
 ):
     # logger.info(f"term_month={term_month}, amount={amount}, page={page}, size={size}")
@@ -99,7 +99,7 @@ async def calculate_interest(
 @router.get("", response_model=List[BankResponse])
 async def read_banks(
     page: int = 1,
-    size: int = 10,
+    size: int = 30,
     session: Session = Depends(get_db)
 ):
     service = BankService(session)
