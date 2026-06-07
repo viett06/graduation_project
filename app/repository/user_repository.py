@@ -17,7 +17,7 @@ class UserRepository:
         return self.session.query(User).filter(User.email == email, User.is_active == True).first()
 
     def get_by_email_is_unactive(self, email: str) -> Optional[User]:
-        return self.session.query(User).filter(User.email == email, User.is_active == True).first()
+        return self.session.query(User).filter(User.email == email, User.is_active == False).first()
 
     def get_all(self, skip: int = 0, limit: int = 10) -> List[User]:
 

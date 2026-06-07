@@ -19,7 +19,7 @@ class UserService:
         self.redis = redis_client
 
     async def create_user(self, user_data: UserCreate, background_tasks: BackgroundTasks) -> User:
-        existing_user = self.__userRepository.get_by_email(user_data.email)
+        existing_user = self.__userRepository.get_by_email_is_unactive(user_data.email)
         hashed_password = AuthHandler.get_password_hash(user_data.password)
 
         if existing_user:
@@ -159,17 +159,19 @@ class UserService:
 
     async def send_otp(self, email: str, type_send: str,  background_tasks: BackgroundTasks):
 
-        user = self.__userRepository.get_by_email(email)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
         otp_code = str(random.randint(100000, 999999))
 
         prefix = "reset_otp"
         if type_send == "create_user":
+            user = self.__userRepository.get_by_email_is_unactive(email)
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
             prefix = "create_user"
 
         elif type_send == "reset_password":
+            user = self.__userRepository.get_by_email(email)
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
             prefix = "reset_otp"
 
         await self.redis.set(f"otp:{prefix}:{email}", otp_code, ex=300)

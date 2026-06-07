@@ -1,5 +1,4 @@
 from datetime import date
-from distutils.util import execute
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from app.models.interestRate import InterestRate
