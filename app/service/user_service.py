@@ -146,7 +146,7 @@ class UserService:
         return self.__userRepository.get_by_id(user_id)
 
     async def get_user_by_email(self, email: str) -> Optional[User]:
-        return self.__userRepository.get_by_email(email)
+        return self.__userRepository.get_by_email_is_unactive(email)
 
     async def set_active_user(self, user: User) -> Optional[User]:
         user.is_active = True
