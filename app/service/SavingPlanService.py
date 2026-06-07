@@ -13,6 +13,9 @@ from app.models.saving_plans import SavingPlans
 from app.repository.bank_repository import BankRepository
 
 
+MAX_OPTIMIZED_PLANS = 3
+
+
 class SavingPlanService:
 
     def __init__(self, db: Session):
@@ -102,6 +105,33 @@ class SavingPlanService:
         return rate / 100.0 if rate > 1 else rate
 
     @staticmethod
+    def _limit_top_plans(result: Dict[str, Any], limit: int = MAX_OPTIMIZED_PLANS) -> Dict[str, Any]:
+        """
+        Giới hạn response optimize chỉ còn các phương án tốt nhất.
+        Thuật toán DP có thể trả top_plans ở cả top-level và trong plan_details.
+        """
+        limited = dict(result or {})
+        plan_details = limited.get("plan_details")
+
+        top_plans = limited.get("top_plans")
+        if not top_plans and isinstance(plan_details, dict):
+            top_plans = plan_details.get("top_plans")
+
+        if isinstance(top_plans, list):
+            top_plans = top_plans[:limit]
+            limited["top_plans"] = top_plans
+
+        if isinstance(plan_details, dict):
+            limited_plan_details = dict(plan_details)
+            if isinstance(limited_plan_details.get("top_plans"), list):
+                limited_plan_details["top_plans"] = limited_plan_details["top_plans"][:limit]
+            if top_plans:
+                limited_plan_details["best_plan"] = top_plans[0]
+            limited["plan_details"] = limited_plan_details
+
+        return limited
+
+    @staticmethod
     def _normalize_algorithm_result(
             result: Dict[str, Any],
             algo: str,
@@ -184,6 +214,7 @@ class SavingPlanService:
             prefer_online=choice_prefer,
         )
         result = self._normalize_algorithm_result(result, algo, initial_amount)
+        result = self._limit_top_plans(result)
 
         # --- Chuẩn bị response ---
         final_amount = result.get('final_amount', 0)

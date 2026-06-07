@@ -150,22 +150,57 @@ class BankRepository:
 
         return result.fetchall()
 
-    def get_bank_by_name_or_code_or_both(self, name: str, code: str) -> Optional[List[dict]]:
+    def get_bank_by_name_or_code_or_both(self, name: str | None, code: str | None) -> Optional[List[dict]]:
+
+        name = name.strip() if name and name.strip() else None
+
+        code = code.strip().upper() if code and code.strip() else None
+
+        search_name = f"%{name}%" if name else None
+
         query = text("""
-                     SELECT *
-                     FROM banks b
-                     WHERE 
-            (:code IS NULL AND :name IS NULL)
-            OR (:code IS NOT NULL AND b.code = :code)
-            OR (:name IS NOT NULL AND b.name = :name)
-    """)
+
+                     SELECT b.*
+
+                     FROM banks AS b
+
+                     WHERE b.status = TRUE
+
+                       AND (
+                         (:code IS NOT NULL AND UPPER(TRIM(b.code)) = :code)
+                             OR (:name IS NOT NULL AND b.name ILIKE :name)
+                         )
+
+                     ORDER BY CASE
+
+                                  WHEN :code IS NOT NULL AND :name IS NOT NULL
+                                      AND UPPER(TRIM(b.code)) = :code
+                                      AND b.name ILIKE :name THEN 0
+
+                                  WHEN :code IS NOT NULL AND UPPER(TRIM(b.code)) = :code THEN 1
+
+                                  WHEN :name IS NOT NULL AND b.name ILIKE :name THEN 2
+
+                                  ELSE 3
+                                  END,
+                              b.name ASC
+
+                     """)
+
         result = self.session.execute(
+
             query,
+
             {
+
                 "code": code,
-                "name": name
-            }
+
+                "name": search_name,
+
+            },
+
         )
+
         return result.mappings().all()
 
     def get_rates_of_bank(self, bank_id: int) -> Bank | None:
