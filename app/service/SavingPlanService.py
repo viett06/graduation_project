@@ -227,11 +227,12 @@ class SavingPlanService:
             "achieved_interest": achieved_interest,
             "is_goal_met": is_goal_met,
             "plan_details": result.get('plan_details', result),
-            "top_plans": result.get("top_plans"),
+            # "top_plans": result.get("top_plans"),
             "algorithm_used": result.get('algorithm', algo),
             "probability_success": result.get('probability_success')
         }
 
+    # follow for chatbot
     def create_plan(self, user_id: int, request: SavingPlanCreate) -> Dict[str, Any]:
         """
         Backward-compatible wrapper: hiện tại chỉ optimize và không lưu DB.

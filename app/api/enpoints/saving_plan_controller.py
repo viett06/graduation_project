@@ -40,7 +40,7 @@ def create_fixed_term_saving_plan(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/{user_id}/save", response_model=SavingPlanResponse)
+@router.post("/save", response_model=SavingPlanResponse)
 def save_saving_plan_option(
     request: SavingPlanOptionSave,
     db: Session = Depends(get_db),
@@ -54,17 +54,13 @@ def save_saving_plan_option(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/history/{user_id}", response_model=list[SavingPlanResponse])
-def get_history(user_id: int, db: Session = Depends(get_db), current_user: Dict[str, Any] = Depends(get_current_active_user)):
+@router.get("/history", response_model=list[SavingPlanResponse])
+def get_history(db: Session = Depends(get_db), current_user: Dict[str, Any] = Depends(get_current_active_user)):
+    user_id = current_user.get("user_id")
     service = SavingPlanService(db)
     return service.get_active_plans(user_id)
 
-@router.get("/{user_id}", response_model=list[SavingPlanResponse])
-def get_saving_plans(user_id: int, db: Session = Depends(get_db), current_user: Dict[str, Any] = Depends(get_current_active_user)):
-    service = SavingPlanService(db)
-    return service.get_active_plans(user_id)
-
-@router.get("/{user_id}/{plan_id}", response_model=SavingPlanResponse)
+@router.get("/{plan_id}", response_model=SavingPlanResponse)
 def get_saving_plan_detail(
     plan_id: int,
     db: Session = Depends(get_db),
@@ -77,9 +73,8 @@ def get_saving_plan_detail(
         raise HTTPException(status_code=404, detail="Saving plan not found")
     return plan
 
-@router.delete("/{user_id}/{plan_id}", response_model=SavingPlanDeleteResponse)
+@router.delete("/{plan_id}", response_model=SavingPlanDeleteResponse)
 def delete_saving_plan(
-    user_id: int,
     plan_id: int,
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_active_user)

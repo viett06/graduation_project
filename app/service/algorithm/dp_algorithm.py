@@ -707,8 +707,8 @@ class DPOptimizer:
             "beam_width": None if self.exact else self.top_k,
             "max_open_options": None if self.exact else self.max_open_options,
             "max_plans_per_state": None if self.exact else self.max_plans_per_state,
-            "selection_mode": selection_mode,
-            "single_deposit_benchmark": benchmark_plan,
+            # "selection_mode": selection_mode,
+            # "single_deposit_benchmark": benchmark_plan,
             "final_amount": best_plan["final_amount"],
             "achieved_interest": best_plan["interest_earned"],
             "plan_details": {
