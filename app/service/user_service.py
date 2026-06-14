@@ -19,7 +19,7 @@ class UserService:
         self.redis = redis_client
 
     async def create_user(self, user_data: UserCreate, background_tasks: BackgroundTasks) -> User:
-        existing_user = self.__userRepository.get_by_email_is_unactive(user_data.email)
+        existing_user = self.__userRepository.get_by_email_any_status(user_data.email)
         hashed_password = AuthHandler.get_password_hash(user_data.password)
 
         if existing_user:
@@ -219,7 +219,6 @@ class UserService:
         user.hashed_password = hashed_pw
         updated_user = self.__userRepository.update(user)
         return updated_user is not None
-
 
 
 
