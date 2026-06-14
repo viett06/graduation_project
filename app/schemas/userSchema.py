@@ -1,5 +1,5 @@
 # app/schemas/user.py
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
 from datetime import datetime
 from typing import Optional, List
 
@@ -11,7 +11,14 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=1)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Password is required")
+        return value
 
 
 class UserUpdate(BaseModel):
@@ -60,4 +67,3 @@ class UserInDBBase(UserBase):
 
 class UserResponse(UserInDBBase):
     user_roles: List[UserRoleOut] = []
-
