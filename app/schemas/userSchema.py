@@ -38,6 +38,20 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_superuser: Optional[bool] = None
 
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
+
+class VerifyChangePasswordRequest(BaseModel):
+    otp_code: str = Field(..., min_length=6, max_length=6)
+
+
 class PermissionOut(BaseModel):
     id: int
     name: str

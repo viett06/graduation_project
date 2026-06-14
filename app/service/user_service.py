@@ -174,6 +174,12 @@ class UserService:
                 raise HTTPException(status_code=404, detail="User not found")
             prefix = "reset_otp"
 
+        elif type_send == "change_password":
+            user = self.__userRepository.get_by_email(email)
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            prefix = "change_password"
+
         await self.redis.set(f"otp:{prefix}:{email}", otp_code, ex=300)
 
         html = f"""
@@ -203,6 +209,9 @@ class UserService:
 
         elif type_send == "reset_password":
             prefix = "reset_otp"
+
+        elif type_send == "change_password":
+            prefix = "change_password"
 
         stored_code = await self.redis.get(f"otp:{prefix}:{email}")
         if not stored_code or stored_code != otp_code:
@@ -234,6 +243,76 @@ class UserService:
         updated_user = self.__userRepository.update(user)
         return updated_user is not None
 
+    async def request_authenticated_password_change(
+        self,
+        user_id: int,
+        new_password: str,
+        background_tasks: BackgroundTasks,
+    ) -> bool:
+        user = self.__userRepository.get_by_id(user_id)
+        if not user or not user.is_active:
+            return False
+
+        try:
+            validate_password_strength(new_password)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+
+        if AuthHandler.verify_password(new_password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password must be different from current password"
+            )
+
+        hashed_pw = AuthHandler.get_password_hash(new_password)
+        await self.redis.set(
+            f"pending_password_change:{user.id}",
+            hashed_pw,
+            ex=300,
+        )
+
+        await self.send_otp(
+            email=user.email,
+            type_send="change_password",
+            background_tasks=background_tasks,
+        )
+        return True
+
+    async def confirm_authenticated_password_change(
+        self,
+        user_id: int,
+        otp_code: str,
+    ) -> bool:
+        user = self.__userRepository.get_by_id(user_id)
+        if not user or not user.is_active:
+            return False
+
+        pending_password_key = f"pending_password_change:{user.id}"
+        hashed_pw = await self.redis.get(pending_password_key)
+        if not hashed_pw:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Password change request expired"
+            )
+
+        is_valid = await self.verify_otp(
+            email=user.email,
+            otp_code=otp_code,
+            type_send="change_password",
+        )
+        if not is_valid:
+            return False
+
+        user.hashed_password = hashed_pw
+        updated_user = self.__userRepository.update(user)
+        if not updated_user:
+            return False
+
+        await self.redis.delete(pending_password_key)
+        return True
 
 
 

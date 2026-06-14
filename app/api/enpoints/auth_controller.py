@@ -14,9 +14,15 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.security.auth_handler import AuthHandler
+from app.core.security.dependencies import get_current_active_user
 from app.core.security.guards import require_permissions, require_roles
 from app.schemas.token import RefreshToken, Token
-from app.schemas.userSchema import UserCreate, UserResponse
+from app.schemas.userSchema import (
+    ChangePasswordRequest,
+    UserCreate,
+    UserResponse,
+    VerifyChangePasswordRequest,
+)
 from app.service.role_service import RoleService
 from app.service.user_service import UserService
 from app.core.security.rbac import RoleEnum, PermissionEnum
@@ -226,6 +232,46 @@ async def verify_reset_password(email: str, otp_code: str, newpassword: str, ses
 
     return {"status": "success", "message": "successful change password"}
 
+
+@router.post("/change-password/request", status_code=status.HTTP_204_NO_CONTENT)
+async def request_change_password(
+    body: ChangePasswordRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_active_user),
+):
+    user_service = UserService(session, redis_config.redis_client)
+
+    success = await user_service.request_authenticated_password_change(
+        user_id=current_user["user_id"],
+        new_password=body.new_password,
+        background_tasks=background_tasks,
+    )
+
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+
+@router.post("/change-password/verify")
+async def verify_change_password(
+    body: VerifyChangePasswordRequest,
+    session: Session = Depends(get_db),
+    current_user: Dict = Depends(get_current_active_user),
+):
+    user_service = UserService(session, redis_config.redis_client)
+
+    success = await user_service.confirm_authenticated_password_change(
+        user_id=current_user["user_id"],
+        otp_code=body.otp_code,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP code not valid",
+        )
+
+    return {"status": "success", "message": "successful change password"}
 
 
 
