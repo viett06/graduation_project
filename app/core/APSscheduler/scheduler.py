@@ -20,7 +20,7 @@ async def crawl_job():
         service = CrawlerService(db)
         logger.info("[Scheduler] Initiating automated crawl cycle for all banks...")
 
-        results = await service.crawl_all_banks(admin_id=6)
+        results = await service.crawl_all_banks()
 
         success_count = sum(1 for status in results.values() if status.get("status") == "success")
         fail_count = len(results) - success_count

@@ -35,14 +35,16 @@ from app.crawler.VIBCrawler import VIBCrawler
 from app.crawler.VPBankCrawler import VPBankCrawler
 from app.crawler.VRBankCrawler import VRBankCrawler
 from app.crawler.VietTinBankCrawler import VietTinBankCrawler
+from app.core.config import settings
 from app.models.interestRate import InterestRate
 from app.models.bank import Bank
 logger = logging.getLogger(__name__)
 
 
 class CrawlerService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, admin_id: Optional[int] = None):
         self.db = db
+        self.admin_id = admin_id if admin_id is not None else settings.CRAWLER_ADMIN_ID
         self._rate_svc = None
         self._audit_svc = None
 
@@ -60,7 +62,8 @@ class CrawlerService:
             self._rate_svc = InterestRateService(self.db)
         return self._rate_svc
 
-    def process_crawled_rates(self, bank_id: int, new_rates: List[dict], admin_id: int = 6):
+    def process_crawled_rates(self, bank_id: int, new_rates: List[dict], admin_id: Optional[int] = None):
+        admin_id = admin_id if admin_id is not None else self.admin_id
         changes = {"updated": 0, "created": 0}
 
         current_rates_map = {
@@ -156,8 +159,9 @@ class CrawlerService:
     async def crawl_and_update(
             self,
             bank_code: Optional[str] = None,
-            admin_id: int =6
+            admin_id: Optional[int] = None
     ):
+        admin_id = admin_id if admin_id is not None else self.admin_id
 
 
         # if bank_code is None or bank_code.upper() == "WEBGIA":
@@ -287,11 +291,12 @@ class CrawlerService:
         except Exception as e:
             logger.exception("Notify websocket failed")
 
-    async def crawl_all_banks(self, admin_id: int = 6):
+    async def crawl_all_banks(self, admin_id: Optional[int] = None):
         """
         Automatically iterates through the list of supported banks
         to trigger the crawling and data update process.
         """
+        admin_id = admin_id if admin_id is not None else self.admin_id
         results = {}
 
         # bank_codes = ["VCB", "BIDV", "CTG", "MB", "VPB", "TPB", "VIB", "SHB", "SCB", "MSB", "OCB", "KLB", "NAB", "BVB",

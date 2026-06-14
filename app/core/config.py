@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     RATE_LIMIT_CAPACITY: int
     REFILL_RATE: int
+    CRAWLER_ADMIN_ID: int = 6
 
     PROJECT_NAME: str = "Auth_Jwt"
 
