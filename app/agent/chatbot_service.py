@@ -19,6 +19,11 @@ from collections.abc import AsyncGenerator
 
 load_dotenv()
 
+
+# =============================================================================
+# 1. Runtime Configuration
+# =============================================================================
+
 http_client = httpx.Client(proxy=None)
 
 client = Groq(
@@ -59,6 +64,12 @@ Không tự viết cú pháp <function=...> trong nội dung trả lời.
 Không trả JSON tool call trong text.
 """
 
+TOOL_NAMES = {tool["function"]["name"] for tool in tools}
+
+
+# =============================================================================
+# 2. Serialization And Stream Helpers
+# =============================================================================
 
 def json_default(value):
     if isinstance(value, (date, Decimal)):
@@ -84,6 +95,10 @@ def split_text_chunks(text: str, chunk_size: int = STREAM_CHUNK_SIZE) -> list[st
         return []
     return [text[index:index + chunk_size] for index in range(0, len(text), chunk_size)]
 
+
+# =============================================================================
+# 3. Input Normalization
+# =============================================================================
 
 def as_list(value) -> list:
     if value is None:
@@ -133,7 +148,7 @@ def coerce_float(value) -> float | None:
     number = float(match.group(0).replace(",", "."))
     if any(unit in text for unit in ("tỷ", "ty", "billion")):
         return number * 1_000_000_000
-    if any(unit in text for unit in ("triệu", "trieu", "million")):
+    if any(unit in text for unit in ("triệu", "trieu", "million")) or re.search(r"\d\s*tr\b", text):
         return number * 1_000_000
     if any(unit in text for unit in ("nghìn", "ngan", "k ")):
         return number * 1_000
@@ -149,22 +164,45 @@ def parse_iso_date(value: str | None) -> date | None:
         return None
 
 
+# =============================================================================
+# 4. Model Client And Provider Error Recovery
+# =============================================================================
+
 def parse_failed_tool_generation(error: Exception) -> tuple[str, dict] | None:
     raw_error = str(error)
-    match = re.search(
-        r"<function=(?P<name>[A-Za-z_][A-Za-z0-9_]*)>?(?P<args>\{.*?\})</function>",
-        raw_error,
-        flags=re.DOTALL,
-    )
+    patterns = [
+        r"<function=(?P<name>[A-Za-z_][A-Za-z0-9_]*)>?\s*(?P<args>\{.*?\})\s*>?</function>",
+        r"attempted to call tool ['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<args>\{.*?\})['\"]",
+    ]
+
+    match = None
+    for pattern in patterns:
+        match = re.search(pattern, raw_error, flags=re.DOTALL)
+        if match:
+            break
+
     if not match:
-        return None
+        for tool_name in TOOL_NAMES:
+            fallback_match = re.search(
+                rf"{re.escape(tool_name)}\s*(?P<args>\{{.*?\}})",
+                raw_error,
+                flags=re.DOTALL,
+            )
+            if fallback_match:
+                match = fallback_match
+                name = tool_name
+                break
+        else:
+            return None
+    else:
+        name = match.group("name")
 
     try:
         arguments = json.loads(match.group("args"))
     except json.JSONDecodeError:
         return None
 
-    return match.group("name"), arguments
+    return name, arguments
 
 
 def is_model_tool_error(error: Exception) -> bool:
@@ -206,6 +244,8 @@ def create_chat_completion_with_retry(
             return client.chat.completions.create(**kwargs)
         except Exception as e:
             last_error = e
+            if use_tools and parse_failed_tool_generation(e):
+                raise
             if not use_tools or not is_model_tool_error(e) or attempt >= MAX_MODEL_RETRIES:
                 raise
             print(f"[Model Retry {attempt + 1}/{MAX_MODEL_RETRIES}] {e}")
@@ -235,6 +275,10 @@ def iter_stream_content_chunks(stream):
         if content:
             yield content
 
+
+# =============================================================================
+# 5. Tool Argument Normalization And Supplemental Context
+# =============================================================================
 
 def compact_rate_rows(
         rows: list[dict],
@@ -312,6 +356,121 @@ def normalize_tool_params(params: dict) -> dict:
     return normalized
 
 
+def sanitize_tool_arguments(arguments) -> dict:
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(arguments, dict):
+        return {}
+    if isinstance(arguments.get("arguments"), dict) and len(arguments) == 1:
+        return arguments["arguments"]
+    return arguments
+
+
+def extract_amount_phrase(text: str) -> str | None:
+    match = re.search(
+        r"\d+(?:[.,]\d+)?\s*(?:tỷ|ty|billion|triệu|trieu|tr|million|nghìn|ngan|k|vnd|đ|dong|đồng)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(0) if match else None
+
+
+def extract_month_value(text: str) -> int | None:
+    match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:tháng|thang|month)", text, flags=re.IGNORECASE)
+    if match:
+        return coerce_int(match.group(1))
+
+    year_match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:năm|nam|year)", text, flags=re.IGNORECASE)
+    if year_match:
+        years = coerce_int(year_match.group(1))
+        return years * 12 if years is not None else None
+
+    return None
+
+
+def extract_channel_value(text: str) -> str | None:
+    lowered = text.lower()
+    if "online" in lowered or "trực tuyến" in lowered or "truc tuyen" in lowered:
+        return "ONLINE"
+    if "counter" in lowered or "tại quầy" in lowered or "tai quay" in lowered or "quầy" in lowered:
+        return "COUNTER"
+    return None
+
+
+def extract_supplemental_params(user_message: str, pending_tool_context: dict) -> dict:
+    missing_fields = set(pending_tool_context.get("missing_fields") or [])
+    text = user_message.strip()
+    extracted = {}
+
+    month_value = extract_month_value(text)
+    if month_value is not None:
+        if "term_month" in missing_fields:
+            extracted["term_month"] = month_value
+        if "duration_month" in missing_fields:
+            extracted["duration_month"] = month_value
+
+    amount_phrase = extract_amount_phrase(text)
+    amount_value = coerce_float(amount_phrase) if amount_phrase else None
+    if amount_value is not None:
+        if "amount" in missing_fields:
+            extracted["amount"] = amount_value
+        if "total_amount" in missing_fields:
+            extracted["total_amount"] = amount_value
+        if "goal_amount" in missing_fields:
+            extracted["goal_amount"] = amount_value
+
+    channel = extract_channel_value(text)
+    if channel:
+        extracted["channel"] = channel
+        extracted["prefer_rate"] = channel
+
+    return extracted
+
+
+async def run_pending_tool_if_supplemented(
+        user_message: str,
+        pending_tool_context: dict | None,
+        session: Session,
+        bank_service: BankService,
+        saving_plan_service: SavingPlanService,
+        polish_response: bool = True,
+) -> tuple[str, list[dict]] | None:
+    if not pending_tool_context:
+        return None
+
+    function_name = pending_tool_context.get("name")
+    if function_name not in TOOL_NAMES:
+        return None
+
+    supplemental_params = extract_supplemental_params(user_message, pending_tool_context)
+    if not supplemental_params:
+        return None
+
+    merged_arguments = {
+        **(pending_tool_context.get("arguments") or {}),
+        **supplemental_params,
+    }
+    tool_result = await execute_tool_arguments(
+        function_name,
+        merged_arguments,
+        session,
+        bank_service,
+        saving_plan_service,
+        tool_call_id="pending_tool_context",
+    )
+    answer = canonical_tool_answer(tool_result["result"])
+    if polish_response:
+        answer = polish_backend_answer(user_message, answer)
+    return answer, [tool_result]
+
+
+# =============================================================================
+# 6. Prompt Context Builders
+# =============================================================================
+
 def format_history_for_agent(history_messages: list[dict[str, str]]) -> str:
     if not history_messages:
         return ""
@@ -321,6 +480,26 @@ def format_history_for_agent(history_messages: list[dict[str, str]]) -> str:
     for message in history_messages[-8:]:
         lines.append(f"{message['role']}: {message['content']}")
     return "\n".join(lines)
+
+
+def format_pending_tool_context(pending_tool_context: dict | None) -> str:
+    if not pending_tool_context:
+        return ""
+
+    return json.dumps(
+        {
+            "pending_function": pending_tool_context.get("name"),
+            "known_arguments": pending_tool_context.get("arguments") or {},
+            "missing_fields": pending_tool_context.get("missing_fields") or [],
+            "instruction": (
+                "Nguoi dung dang bo sung thong tin cho function dang cho. "
+                "Hay merge thong tin moi voi known_arguments va goi lai pending_function. "
+                "Chi hoi lai neu backend van tra missing_fields sau khi goi tool."
+            ),
+        },
+        ensure_ascii=False,
+        default=json_default,
+    )
 
 
 def format_rate_answer(params: dict, rows: list[dict]) -> str:
@@ -375,26 +554,30 @@ def format_rate_answer(params: dict, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def build_polish_messages(user_message: str, backend_answer: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Bạn chỉ biên tập câu trả lời tiếng Việt cho tự nhiên hơn. "
+                "Không thêm, không bỏ, không đổi bất kỳ số liệu, mã ngân hàng, kỳ hạn, "
+                "thứ hạng, kết luận hoặc chênh lệch nào. Nếu không chắc, trả lại nguyên văn."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Câu hỏi người dùng: {user_message}\n"
+                f"Câu trả lời backend cần giữ nguyên dữ liệu:\n{backend_answer}"
+            ),
+        },
+    ]
+
+
 def polish_backend_answer(user_message: str, backend_answer: str) -> str:
     try:
         response = create_chat_completion_with_retry(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Bạn chỉ biên tập câu trả lời tiếng Việt cho tự nhiên hơn. "
-                        "Không thêm, không bỏ, không đổi bất kỳ số liệu, mã ngân hàng, kỳ hạn, "
-                        "thứ hạng, kết luận hoặc chênh lệch nào. Nếu không chắc, trả lại nguyên văn."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Câu hỏi người dùng: {user_message}\n"
-                        f"Câu trả lời backend cần giữ nguyên dữ liệu:\n{backend_answer}"
-                    ),
-                },
-            ],
+            messages=build_polish_messages(user_message, backend_answer),
             initial_temperature=0,
         )
     except Exception:
@@ -434,6 +617,51 @@ def format_saving_plan_answer(result: dict) -> str:
     )
 
 
+def format_compare_interest_answer(result: dict) -> str:
+    if result.get("missing_fields"):
+        missing_labels = {
+            "term_month": "kỳ hạn gửi",
+            "amount": "số tiền gửi",
+        }
+        missing = ", ".join(missing_labels.get(field, field) for field in result["missing_fields"])
+        matched_banks = result.get("matched_banks") or []
+        bank_text = ""
+        if matched_banks:
+            bank_text = " cho " + " và ".join(
+                str(bank.get("code") or bank.get("name") or "ngân hàng")
+                for bank in matched_banks
+            )
+        return f"Bạn cần bổ sung {missing}{bank_text} để tôi tính và so sánh tiền lãi."
+
+    if result.get("error"):
+        return result["error"]
+
+    calculations = result.get("calculations") or []
+    if not calculations:
+        return "Hiện tại tôi chưa có đủ dữ liệu để so sánh tiền lãi giữa các ngân hàng này."
+
+    lines = [
+        (
+            f"So sánh với số tiền {result.get('amount', 0):,.0f} VND, "
+            f"kỳ hạn {result.get('term_month')} tháng, kênh {result.get('channel')}:"
+        )
+    ]
+    for item in sorted(calculations, key=lambda row: row.get("total_amount", 0), reverse=True):
+        lines.append(
+            f"- {item['bank_name']}: lãi suất {item['interest_rate']}%/năm, "
+            f"tiền lãi {item['interest_amount']:,.0f} VND, "
+            f"tổng nhận {item['total_amount']:,.0f} VND."
+        )
+
+    if result.get("better_bank"):
+        lines.append(
+            f"Kết luận: {result['better_bank']} tốt hơn, chênh lệch tiền lãi khoảng "
+            f"{result.get('difference_interest_amount', 0):,.0f} VND."
+        )
+
+    return "\n".join(lines)
+
+
 def fallback_context_answer(result_context: dict) -> str:
     if result_context.get("fallback_answer"):
         return result_context["fallback_answer"]
@@ -451,6 +679,16 @@ def fallback_context_answer(result_context: dict) -> str:
 
     return OUT_OF_SCOPE_ANSWER
 
+
+def canonical_tool_answer(result_context: dict) -> str:
+    if result_context.get("fallback_answer"):
+        return result_context["fallback_answer"]
+    return fallback_context_answer(result_context)
+
+
+# =============================================================================
+# 8. Domain Tool Implementations
+# =============================================================================
 
 def resolve_bank_id(session: Session, bank_id: int | None, bank_code: str | None, bank_name: str | None) -> int | None:
     if bank_id:
@@ -594,6 +832,7 @@ async def execute_function_call(
             "type": "compare_bank_interest",
             "params": params,
             "comparison": result,
+            "fallback_answer": format_compare_interest_answer(result),
         }
 
     if intent == "create_saving_plan":
@@ -627,13 +866,28 @@ async def execute_function_call(
     }
 
 
+# =============================================================================
+# 9. Agent Message Assembly
+# =============================================================================
 
 def build_agent_messages(
         user_message: str,
         history_messages: list[dict[str, str]] | None = None,
+        pending_tool_context: dict | None = None,
 ) -> list[dict[str, str]]:
     # build message bao gồm 3 phần hệ thống, lịch sử, hiện tại
     messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+    pending_context_text = format_pending_tool_context(pending_tool_context)
+    if pending_context_text:
+        messages.append({
+            "role": "system",
+            "content": (
+                "Pending tool context từ lượt trước:\n"
+                f"{pending_context_text}\n"
+                "Nếu tin nhắn hiện tại chỉ là thông tin bổ sung như số tiền, kỳ hạn, "
+                "kênh gửi hoặc mục tiêu, hãy dùng pending_function thay vì xem là câu hỏi mới."
+            ),
+        })
     history_text = format_history_for_agent(history_messages or [])
     if history_text:
         messages.append({
@@ -643,6 +897,10 @@ def build_agent_messages(
     messages.append({"role": "user", "content": user_message})
     return messages
 
+
+# =============================================================================
+# 10. Tool Runtime
+# =============================================================================
 
 def assistant_tool_call_message(response_message) -> dict:
     return {
@@ -670,7 +928,18 @@ async def execute_tool_arguments(
         saving_plan_service: SavingPlanService,
         tool_call_id: str | None = None,
 ) -> dict:
-    params = normalize_tool_params(arguments)
+    if function_name not in TOOL_NAMES:
+        return {
+            "tool_call_id": tool_call_id,
+            "name": function_name,
+            "arguments": {},
+            "result": {
+                "type": "tool_error",
+                "message": OUT_OF_SCOPE_ANSWER,
+            },
+        }
+
+    params = normalize_tool_params(sanitize_tool_arguments(arguments))
     result = await execute_function_call(
         function_name,
         params,
@@ -708,14 +977,31 @@ async def execute_tool_call(
     )
 
 
+# =============================================================================
+# 11. Agent Loop
+# =============================================================================
+
 async def run_tool_calling_agent(
         user_message: str,
         history_messages: list[dict[str, str]],
         session: Session,
         bank_service: BankService,
         saving_plan_service: SavingPlanService,
+        pending_tool_context: dict | None = None,
+        polish_response: bool = True,
 ) -> tuple[str, list[dict]]:
-    messages = build_agent_messages(user_message, history_messages)
+    pending_result = await run_pending_tool_if_supplemented(
+        user_message,
+        pending_tool_context,
+        session,
+        bank_service,
+        saving_plan_service,
+        polish_response,
+    )
+    if pending_result:
+        return pending_result
+
+    messages = build_agent_messages(user_message, history_messages, pending_tool_context)
     print(f"messages: {messages}")
     tool_results = []
 
@@ -742,9 +1028,10 @@ async def run_tool_calling_agent(
                 tool_call_id="recovered_tool_call",
             )
             tool_results.append(tool_result)
-            if tool_result["result"].get("fallback_answer"):
-                return polish_backend_answer(user_message, tool_result["result"]["fallback_answer"]), tool_results
-            return fallback_context_answer(tool_result["result"]), tool_results
+            answer = canonical_tool_answer(tool_result["result"])
+            if polish_response:
+                answer = polish_backend_answer(user_message, answer)
+            return answer, tool_results
 
         response_message = response.choices[0].message
 
@@ -770,11 +1057,94 @@ async def run_tool_calling_agent(
                 "tool_call_id": tool_call.id,
                 "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
             })
-            if tool_result["result"].get("fallback_answer"):
-                return polish_backend_answer(user_message, tool_result["result"]["fallback_answer"]), tool_results
+            if tool_result["result"].get("fallback_answer") or tool_result["result"].get("message"):
+                answer = canonical_tool_answer(tool_result["result"])
+                if polish_response:
+                    answer = polish_backend_answer(user_message, answer)
+                return answer, tool_results
 
     return fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER, tool_results
 
+
+# =============================================================================
+# 12. Conversation Turn Lifecycle
+# =============================================================================
+
+def create_agent_services(session) -> tuple[BankService, SavingPlanService, ChatbotConversationService]:
+    return (
+        BankService(session),
+        SavingPlanService(session),
+        ChatbotConversationService(session),
+    )
+
+
+def prepare_conversation_turn(
+        conversation_service: ChatbotConversationService,
+        user_message: str,
+        user_id: int | None,
+        use_context: bool,
+):
+    conversation = None
+    history_messages = []
+    pending_tool_context = None
+
+    if use_context:
+        conversation = conversation_service.get_or_create_user_conversation(
+            user_id=user_id,
+            title=user_message[:240],
+        )
+        history_messages = conversation_service.build_context_messages(conversation.id, limit=20)
+        pending_tool_context = conversation_service.build_pending_tool_context(conversation.id)
+        conversation_service.add_user_message(conversation.id, user_message)
+
+    return conversation, history_messages, pending_tool_context
+
+
+def save_conversation_turn(
+        conversation_service: ChatbotConversationService,
+        use_context: bool,
+        conversation,
+        answer: str,
+        tool_results: list[dict],
+) -> None:
+    if use_context and conversation:
+        conversation_service.add_assistant_message(
+            conversation.id,
+            answer,
+            intent=tool_results[-1]["name"] if tool_results else "out_of_scope",
+            message_metadata=to_jsonable({
+                "tool_results": tool_results,
+            }),
+        )
+        conversation_service.commit()
+
+
+async def stream_final_answer_chunks(
+        user_message: str,
+        canonical_answer: str,
+        use_llm_stream: bool,
+):
+    if use_llm_stream:
+        try:
+            stream = create_chat_completion_stream(
+                build_polish_messages(user_message, canonical_answer),
+                initial_temperature=0,
+            )
+            for chunk in iter_stream_content_chunks(stream):
+                yield chunk
+                await asyncio.sleep(0)
+            return
+        except Exception as e:
+            print(f"[Final Answer Stream Error] {e}")
+
+    for chunk in split_text_chunks(canonical_answer):
+        yield chunk
+        await asyncio.sleep(0.02)
+
+
+# =============================================================================
+# 13. Public Agent Entry Points
+# =============================================================================
 
 async def run_agent(
         user_message: str,
@@ -782,46 +1152,38 @@ async def run_agent(
         user_id: int | None = None,
         use_context: bool = True,
 ) -> dict:
-
-    bank_service = BankService(session)
-    saving_plan_service = SavingPlanService(session)
-    conversation_service = ChatbotConversationService(session)
+    bank_service, saving_plan_service, conversation_service = create_agent_services(session)
 
     print(f"\n{'='*60}")
     print(f"user: {user_message}")
     print(f"\n{'='*60}")
 
     conversation = None
-    history_messages = []
 
     try:
-        if use_context:
-            conversation = conversation_service.get_or_create_user_conversation(
-                user_id=user_id,
-                title=user_message[:240],
-            )
-            history_messages = conversation_service.build_context_messages(conversation.id, limit=20)
-            conversation_service.add_user_message(conversation.id, user_message)
-
+        conversation, history_messages, pending_tool_context = prepare_conversation_turn(
+            conversation_service,
+            user_message,
+            user_id,
+            use_context,
+        )
         answer, tool_results = await run_tool_calling_agent(
             user_message,
             history_messages,
             session,
             bank_service,
             saving_plan_service,
+            pending_tool_context,
         )
         print(f"\n[Tool Results] {json.dumps(tool_results, ensure_ascii=False, default=json_default)}")
 
-        if use_context and conversation:
-            conversation_service.add_assistant_message(
-                conversation.id,
-                answer,
-                intent=tool_results[-1]["name"] if tool_results else "out_of_scope",
-                message_metadata=to_jsonable({
-                    "tool_results": tool_results,
-                }),
-            )
-            conversation_service.commit()
+        save_conversation_turn(
+            conversation_service,
+            use_context,
+            conversation,
+            answer,
+            tool_results,
+        )
     except Exception as e:
         print(f"[Agent Error] {e}")
         conversation_service.rollback()
@@ -841,155 +1203,51 @@ async def stream_agent_answer(
         user_id: int | None = None,
         use_context: bool = True,
 ) -> AsyncGenerator[str, None]:
-    bank_service = BankService(session)
-    saving_plan_service = SavingPlanService(session)
-    conversation_service = ChatbotConversationService(session)
+    bank_service, saving_plan_service, conversation_service = create_agent_services(session)
 
     conversation = None
-    history_messages = []
-    tool_results = []
-    answer_parts = []
     answer = ""
 
     try:
-        if use_context:
-            conversation = conversation_service.get_or_create_user_conversation(
-                user_id=user_id,
-                title=user_message[:240],
-            )
-            history_messages = conversation_service.build_context_messages(conversation.id, limit=20)
-            conversation_service.add_user_message(conversation.id, user_message)
+        conversation, history_messages, pending_tool_context = prepare_conversation_turn(
+            conversation_service,
+            user_message,
+            user_id,
+            use_context,
+        )
+        answer, tool_results = await run_tool_calling_agent(
+            user_message,
+            history_messages,
+            session,
+            bank_service,
+            saving_plan_service,
+            pending_tool_context,
+            polish_response=False,
+        )
 
-        messages = build_agent_messages(user_message, history_messages)
-
-        for _ in range(MAX_TOOL_ROUNDS):
-            try:
-                response = create_chat_completion_with_retry(
-                    messages=messages,
-                    use_tools=True,
-                    retry_system_prompt=TOOL_RETRY_SYSTEM_PROMPT,
-                )
-            except Exception as e:
-                recovered_tool = parse_failed_tool_generation(e)
-                if not recovered_tool:
-                    raise
-
-                function_name, arguments = recovered_tool
-                tool_result = await execute_tool_arguments(
-                    function_name,
-                    arguments,
-                    session,
-                    bank_service,
-                    saving_plan_service,
-                    tool_call_id="recovered_tool_call",
-                )
-                tool_results.append(tool_result)
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "recovered_tool_call",
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": json.dumps(arguments, ensure_ascii=False, default=json_default),
-                            },
-                        }
-                    ],
-                })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": "recovered_tool_call",
-                    "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
-                })
-                try:
-                    stream = create_chat_completion_stream(messages)
-                    for chunk in iter_stream_content_chunks(stream):
-                        answer_parts.append(chunk)
-                        yield encode_stream_event("chunk", {
-                            "conversation_id": conversation.id if conversation else None,
-                            "chunk": chunk,
-                        })
-                        await asyncio.sleep(0)
-                    answer = "".join(answer_parts).strip()
-                except Exception as stream_error:
-                    print(f"[Recovered Tool Final Stream Error] {stream_error}")
-                    answer = tool_result["result"].get("fallback_answer") or fallback_context_answer(tool_result["result"])
-                break
-
-            response_message = response.choices[0].message
-            if not response_message.tool_calls:
-                try:
-                    stream = create_chat_completion_stream(messages)
-                    for chunk in iter_stream_content_chunks(stream):
-                        answer_parts.append(chunk)
-                        yield encode_stream_event("chunk", {
-                            "conversation_id": conversation.id if conversation else None,
-                            "chunk": chunk,
-                        })
-                        await asyncio.sleep(0)
-                    answer = "".join(answer_parts).strip()
-                except Exception as e:
-                    print(f"[Stream Generation Error] {e}")
-                    answer = response_message.content or OUT_OF_SCOPE_ANSWER
-                if not answer:
-                    answer = response_message.content or OUT_OF_SCOPE_ANSWER
-                break
-
-            messages.append(assistant_tool_call_message(response_message))
-
-            for tool_call in response_message.tool_calls:
-                tool_result = await execute_tool_call(
-                    tool_call,
-                    session,
-                    bank_service,
-                    saving_plan_service,
-                )
-                tool_results.append(tool_result)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(tool_result["result"], ensure_ascii=False, default=json_default),
-                })
-
-            try:
-                stream = create_chat_completion_stream(messages)
-                for chunk in iter_stream_content_chunks(stream):
-                    answer_parts.append(chunk)
-                    yield encode_stream_event("chunk", {
-                        "conversation_id": conversation.id if conversation else None,
-                        "chunk": chunk,
-                    })
-                    await asyncio.sleep(0)
-                answer = "".join(answer_parts).strip()
-            except Exception as e:
-                print(f"[Tool Final Stream Error] {e}")
-                answer = fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER
-            break
-
-        if not answer:
-            answer = fallback_context_answer(tool_results[-1]["result"]) if tool_results else OUT_OF_SCOPE_ANSWER
-
-        if not answer_parts:
-            for chunk in split_text_chunks(answer):
-                answer_parts.append(chunk)
-                yield encode_stream_event("chunk", {
-                    "conversation_id": conversation.id if conversation else None,
-                    "chunk": chunk,
-                })
-                await asyncio.sleep(0.02)
-
-        if use_context and conversation:
-            conversation_service.add_assistant_message(
-                conversation.id,
+        streamed_answer_parts = []
+        async for chunk in stream_final_answer_chunks(
+                user_message,
                 answer,
-                intent=tool_results[-1]["name"] if tool_results else "out_of_scope",
-                message_metadata=to_jsonable({
-                    "tool_results": tool_results,
-                }),
-            )
-            conversation_service.commit()
+                use_llm_stream=bool(tool_results),
+        ):
+            streamed_answer_parts.append(chunk)
+            yield encode_stream_event("chunk", {
+                "conversation_id": conversation.id if conversation else None,
+                "chunk": chunk,
+            })
+
+        streamed_answer = "".join(streamed_answer_parts).strip()
+        if streamed_answer:
+            answer = streamed_answer
+
+        save_conversation_turn(
+            conversation_service,
+            use_context,
+            conversation,
+            answer,
+            tool_results,
+        )
     except Exception as e:
         print(f"[Stream Agent Error] {e}")
         conversation_service.rollback()

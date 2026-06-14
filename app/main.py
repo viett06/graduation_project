@@ -62,7 +62,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.middleware("http")(rate_limit_middleware)
+# app.middleware("http")(rate_limit_middleware)
 
 # --- Routes ---
 app.include_router(auth_controller.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Auth"])

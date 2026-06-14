@@ -76,6 +76,34 @@ class ChatbotConversationService:
             if message.role in {"user", "assistant"}
         ]
 
+    def build_pending_tool_context(self, conversation_id: int, limit: int = 10) -> dict | None:
+        messages = self.repository.get_recent_messages(conversation_id, limit=limit)
+        if not messages or messages[-1].role != "assistant":
+            return None
+
+        metadata = messages[-1].message_metadata or {}
+        tool_results = metadata.get("tool_results") or []
+        if not tool_results:
+            return None
+
+        latest_tool = tool_results[-1]
+        result = latest_tool.get("result") or {}
+        missing_fields = result.get("missing_fields")
+
+        if not missing_fields and result.get("type") == "compare_bank_interest":
+            comparison = result.get("comparison") or {}
+            missing_fields = comparison.get("missing_fields")
+
+        if not missing_fields:
+            return None
+
+        return {
+            "name": latest_tool.get("name"),
+            "arguments": latest_tool.get("arguments") or {},
+            "missing_fields": missing_fields,
+            "result_type": result.get("type"),
+        }
+
     def add_user_message(self, conversation_id: int, content: str):
         return self.repository.add_message(conversation_id, "user", content)
 
