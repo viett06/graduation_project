@@ -4,6 +4,18 @@ from datetime import datetime
 from typing import Optional, List
 
 
+def validate_password_strength(value: str) -> str:
+    if not value or not value.strip():
+        raise ValueError("Password is required")
+    if len(value) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if not any(char.isupper() for char in value):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not any(char.islower() for char in value):
+        raise ValueError("Password must contain at least one lowercase letter")
+    return value
+
+
 class UserBase(BaseModel):
     email: EmailStr
     first_name: str
@@ -11,14 +23,12 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=8)
 
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("Password is required")
-        return value
+        return validate_password_strength(value)
 
 
 class UserUpdate(BaseModel):

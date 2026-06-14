@@ -4,7 +4,7 @@ from venv import create
 from aiosmtplib import send
 from sqlalchemy.orm import Session
 from app.models.user import User
-from app.schemas.userSchema import UserCreate, UserUpdate
+from app.schemas.userSchema import UserCreate, UserUpdate, validate_password_strength
 from app.core.security.auth_handler import AuthHandler
 from app.repository.user_repository import UserRepository
 import random
@@ -215,6 +215,14 @@ class UserService:
         if not user:
             return False
 
+        try:
+            validate_password_strength(new_password)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+
         if AuthHandler.verify_password(new_password, user.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -225,7 +233,6 @@ class UserService:
         user.hashed_password = hashed_pw
         updated_user = self.__userRepository.update(user)
         return updated_user is not None
-
 
 
 
