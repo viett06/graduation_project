@@ -93,6 +93,12 @@ class ChatbotConversationRepository:
         self.session.flush()
         return conversation
 
+    def clear_conversation_messages(self, conversation_id: int):
+        from sqlalchemy import delete
+        stmt = delete(ChatbotMessage).where(ChatbotMessage.conversation_id == conversation_id)
+        self.session.execute(stmt)
+        self.session.flush()
+
     def commit(self):
         self.session.commit()
 

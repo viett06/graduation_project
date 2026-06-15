@@ -114,3 +114,16 @@ async def list_chatbot_messages(
         user_id=user_id,
         limit=limit,
     )
+
+
+@router.delete("/messages", status_code=200)
+async def clear_chatbot_messages(
+        session: Session = Depends(get_db),
+        current_user: Dict[str, Any] = Depends(get_current_active_user),
+):
+    user_id = current_user.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user token.")
+
+    ChatbotConversationService(session).clear_user_messages(user_id=user_id)
+    return {"message": "Chat history cleared successfully."}
