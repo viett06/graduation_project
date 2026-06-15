@@ -12,6 +12,7 @@ from app.schemas.savingPlanSchema import SavingPlanCreate
 from app.service.bankService import BankService
 from app.service.chatbotConversationService import ChatbotConversationService
 from app.service.SavingPlanService import SavingPlanService
+from app.service.rag import KnowledgeBaseService
 from sqlalchemy.orm import Session
 from datetime import date
 from decimal import Decimal
@@ -53,6 +54,10 @@ Bạn là trợ lý tài chính ngân hàng bằng tiếng Việt.
 Nguyên tắc:
 - Khi người dùng hỏi về lãi suất, tính lãi, so sánh ngân hàng hoặc lập kế hoạch tiết kiệm,
   hãy dùng tools được cung cấp để lấy dữ liệu backend. Không tự đoán số liệu.
+- Khi người dùng hỏi giải thích khái niệm, FAQ, chính sách chung, cách dùng app hoặc thuật ngữ tiết kiệm,
+  hãy dùng search_knowledge_base để lấy tài liệu liên quan.
+- Nếu câu hỏi vừa cần số liệu/tính toán vừa cần giải thích, có thể gọi tool dữ liệu trước rồi gọi
+  search_knowledge_base để bổ sung phần giải thích.
 - Nếu người dùng trả lời tiếp để bổ sung dữ liệu còn thiếu, hãy dựa vào Context hội thoại gần đây
   và gọi lại tool phù hợp với dữ liệu đã merge.
 - Nếu thiếu trường bắt buộc để tính toán, vẫn gọi tool khi có thể; backend sẽ trả missing_fields,
@@ -346,6 +351,7 @@ def normalize_tool_params(params: dict) -> dict:
     normalized["bank_names"] = [name.strip() for name in bank_names if name]
 
     normalized["limit"] = coerce_int(normalized.get("limit")) or MAX_RATE_ROWS_FOR_LLM
+    normalized["top_k"] = coerce_int(normalized.get("top_k")) or 4
 
     for key in ("term_month", "duration_month", "bank_id", "user_id"):
         normalized[key] = coerce_int(normalized.get(key))
@@ -662,6 +668,23 @@ def format_compare_interest_answer(result: dict) -> str:
     return "\n".join(lines)
 
 
+def format_knowledge_base_answer(result: dict) -> str:
+    if result.get("message"):
+        return result["message"]
+
+    results = result.get("results") or []
+    if not results:
+        return "Tôi chưa tìm thấy tài liệu phù hợp trong kho kiến thức."
+
+    lines = []
+    for index, item in enumerate(results[:4], start=1):
+        lines.append(f"{index}. {item.get('title')}: {item.get('content')}")
+        if item.get("source"):
+            lines.append(f"Nguồn: {item['source']}")
+
+    return "\n\n".join(lines)
+
+
 def fallback_context_answer(result_context: dict) -> str:
     if result_context.get("fallback_answer"):
         return result_context["fallback_answer"]
@@ -858,6 +881,19 @@ async def execute_function_call(
             "params": params,
             "plan": result,
             "fallback_answer": format_saving_plan_answer(result),
+        }
+
+    if intent == "search_knowledge_base":
+        query = (params.get("query") or "").strip()
+        result = KnowledgeBaseService().search(
+            query=query,
+            top_k=params.get("top_k") or 4,
+        )
+        return {
+            "type": "knowledge_base_search",
+            "params": params,
+            "knowledge": result,
+            "fallback_answer": format_knowledge_base_answer(result),
         }
 
     return {

@@ -188,5 +188,31 @@ tools = [
                 "additionalProperties": False
             },
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": (
+                "Tìm trong kho kiến thức/FAQ/tài liệu nghiệp vụ về gửi tiết kiệm. "
+                "Dùng khi người dùng hỏi khái niệm, giải thích, chính sách chung, cách dùng app, "
+                "rút trước hạn, gửi online so với tại quầy, thuật ngữ tiết kiệm hoặc giới hạn tư vấn. "
+                "Không dùng để tra cứu lãi suất hiện tại hoặc tính tiền lãi cụ thể."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Câu hỏi hoặc nội dung cần tìm trong kho kiến thức."
+                    },
+                    "top_k": {
+                        "type": integer_like,
+                        "description": "Số đoạn tài liệu liên quan cần lấy, mặc định 4."
+                    }
+                },
+                "additionalProperties": False
+            },
+        }
     }
 ]
