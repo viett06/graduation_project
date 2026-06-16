@@ -25,6 +25,13 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
 
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_required_name(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("First name and last name are required")
+        return value.strip()
+
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str) -> str:
