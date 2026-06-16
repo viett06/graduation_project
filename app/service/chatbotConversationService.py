@@ -122,6 +122,12 @@ class ChatbotConversationService:
             message_metadata=message_metadata,
         )
 
+    def clear_user_messages(self, user_id: int):
+        conversation = self.repository.get_active_conversation_by_user(user_id)
+        if conversation:
+            self.repository.clear_conversation_messages(conversation.id)
+            self.commit()
+
     def commit(self):
         self.repository.commit()
 
