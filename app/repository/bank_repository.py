@@ -9,6 +9,12 @@ class BankRepository:
     def __init__(self, session: Session):
         self.session = session
 
+    @staticmethod
+    def _risk_level_filter_clause(risk_level: int | None) -> str:
+        if risk_level is None:
+            return ""
+        return "AND b.ranking_risk <= :risk_level"
+
     def find_bank_by_name(self, name:str)-> Optional[Bank]:
         bank = select(Bank).where(Bank.name == name)
         return self.session.execute(bank).scalar_one_or_none()
@@ -75,11 +81,14 @@ class BankRepository:
             term_month: int,
             amount: float,
             channel: str | None = None,
+            risk_level: int | None = None,
     ):
-        query = text("""
+        risk_filter = self._risk_level_filter_clause(risk_level)
+        query = text(f"""
             SELECT b.id AS bank_id,
                    UPPER(b.code) AS bank_code,
                    b.name AS bank_name,
+                   b.ranking_risk,
                    ir.rate,
                    ir.term_month,
                    UPPER(ir.channel) AS channel,
@@ -96,17 +105,18 @@ class BankRepository:
               AND (ir.min_amount <= :amount OR ir.min_amount IS NULL)
               AND (ir.max_amount > :amount OR ir.max_amount IS NULL)
               AND (:channel IS NULL OR UPPER(ir.channel) = UPPER(:channel))
+              {risk_filter}
             ORDER BY ir.rate DESC, ir.effective_date DESC, ir.updated_at DESC, b.name ASC
             LIMIT 1
         """)
-        return self.session.execute(
-            query,
-            {
-                "term_month": term_month,
-                "amount": amount,
-                "channel": channel,
-            }
-        ).mappings().first()
+        params = {
+            "term_month": term_month,
+            "amount": amount,
+            "channel": channel,
+        }
+        if risk_level is not None:
+            params["risk_level"] = risk_level
+        return self.session.execute(query, params).mappings().first()
 
     def commit(self):
         self.session.commit()
@@ -276,12 +286,16 @@ class BankRepository:
             self,
             term_month: int,
             codes: list[str] | None,
-            channel: str = "ONLINE"
+            channel: str = "ONLINE",
+            risk_level: int | None = None,
     ):
-        query_text = """
+        risk_filter = self._risk_level_filter_clause(risk_level)
+
+        query_text = f"""
                      SELECT b.id, \
                             b.code, \
                             b.name, \
+                            b.ranking_risk, \
                             ir.term_month, \
                             ir.rate
                      FROM banks AS b
@@ -290,14 +304,17 @@ class BankRepository:
                      WHERE b.status = TRUE
                        AND ir.rate IS NOT NULL
                        AND ir.term_month <= :term_month
-                       AND UPPER(ir.channel) = UPPER(:channel) {code_filter}
+                       AND UPPER(ir.channel) = UPPER(:channel)
+                       {risk_filter} {{code_filter}}
                      ORDER BY ir.rate DESC \
                      """
 
         params = {
             "term_month": term_month,
-            "channel": channel
+            "channel": channel,
         }
+        if risk_level is not None:
+            params["risk_level"] = risk_level
 
         if codes:
             query = text(

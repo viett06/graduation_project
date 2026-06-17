@@ -770,6 +770,7 @@ def create_saving_plan(saving_plan_service: SavingPlanService, args: dict):
         goal_amount=goal_amount,
         prefer_rate=(args.get("prefer_rate") or "ONLINE").upper(),
         codes=[code.strip().upper() for code in (args.get("codes") or []) if code],
+        risk_level=args.get("risk_level"),
         notes=args.get("notes"),
     )
 

@@ -12,6 +12,7 @@ class BankBase(BaseModel):
     logo_url: Optional[str] = None
     website_url: Optional[str] = None
     rate_source: Optional[str] = None
+    ranking_risk: int = Field(default=5, ge=1, le=10, description="Xếp hạng rủi ro ngân hàng (1-10)")
     status: bool = True
 
 class BankCreate(BankBase):
@@ -24,6 +25,7 @@ class UpdateBank(BaseModel):
     logo_url: Optional[str] = None
     website_url: Optional[str] = None
     rate_source: Optional[str] = None
+    ranking_risk: Optional[int] = Field(default=None, ge=1, le=10)
     status: Optional[bool] = True
 
 class InterestRateResponse(BaseModel):

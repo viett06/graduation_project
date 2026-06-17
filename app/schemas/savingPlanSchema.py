@@ -24,6 +24,12 @@ class SavingPlanCreate(SavingPlanBase):
     total_amount: float = Field(ge=1_000_000)
     prefer_rate: Optional[str] =  "ONLINE"              # ưu tiên lãi suất online
     codes: Optional[List[str]] = []                    # chỉ chọn ngân hàng có mã trong list này
+    risk_level: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Khẩu vị rủi ro người dùng (1-10). Chỉ lấy ngân hàng có ranking_risk <= mức này.",
+    )
 
 class SavingPlanResponse(SavingPlanBase):
     id: int
@@ -52,6 +58,12 @@ class SavingPlanFixedTermCreate(BaseModel):
     total_amount: float = Field(ge=1_000_000)
     term_month: int
     channel: Optional[str] = None
+    risk_level: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Khẩu vị rủi ro người dùng (1-10). Chỉ lấy ngân hàng có ranking_risk <= mức này.",
+    )
 
 class SavingPlanFixedTermResponse(BaseModel):
     plan_id: Optional[int] = None
