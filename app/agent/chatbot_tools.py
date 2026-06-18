@@ -150,7 +150,8 @@ tools = [
             "name": "create_saving_plan",
             "description": (
                 "Lập hoặc tối ưu kế hoạch gửi tiết kiệm theo mục tiêu. "
-                "Nếu thiếu tổng tiền hoặc thời gian, backend sẽ trả missing_fields."
+                "Nếu thiếu tổng tiền hoặc thời gian, backend sẽ trả missing_fields. "
+                "Dùng risk_group khi người dùng nêu nhóm rủi ro muốn lọc (giá trị do hệ thống/frontend quy định)."
             ),
             "parameters": {
                 "type": "object",
@@ -179,6 +180,13 @@ tools = [
                         "type": ["array", "string", "null"],
                         "description": "Mã ngân hàng muốn ưu tiên nếu có.",
                         "items": {"type": "string"}
+                    },
+                    "risk_group": {
+                        "type": integer_like,
+                        "description": (
+                            "Mã nhóm rủi ro muốn lọc. "
+                            "Chỉ xét ngân hàng có ranking_risk trùng giá trị này."
+                        ),
                     },
                     "notes": {
                         "type": ["string", "null"],

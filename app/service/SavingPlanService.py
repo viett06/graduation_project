@@ -67,13 +67,13 @@ class SavingPlanService:
             term_month: int,
             codes: List[str],
             channel: str = "ONLINE",
-            risk_level: int | None = None,
+            risk_group: int | None = None,
     ):
         banks = self.bank_repo.get_all_banks_and_rates_follow_duration_month(
             term_month,
             codes,
             channel,
-            risk_level=risk_level,
+            risk_group=risk_group,
         )
 
         bank_profile_map: dict[str, DPBankProfile] = {}
@@ -201,12 +201,12 @@ class SavingPlanService:
                 choice_prefer = True
 
         algo = "dp"
-        risk_level = getattr(request, "risk_level", None)
+        risk_group = getattr(request, "risk_group", None)
         dp_banks = self.banks_rate_follow_duration_alls(
             duration_months,
             codes=codes,
             channel="ONLINE" if choice_prefer else "COUNTER",
-            risk_level=risk_level,
+            risk_group=risk_group,
         )
         self.dp = DPOptimizer(
             banks=dp_banks,
@@ -258,11 +258,11 @@ class SavingPlanService:
             term_month=term_month,
             amount=amount,
             channel=channel,
-            risk_level=request.risk_level,
+            risk_group=request.risk_group,
         )
         if not best_rate:
             raise ValueError(
-                "Không tìm thấy lãi suất phù hợp với kỳ hạn, số tiền và khẩu vị rủi ro đã chọn."
+                "Không tìm thấy lãi suất phù hợp với kỳ hạn, số tiền và nhóm rủi ro đã chọn."
             )
 
         raw_rate = float(best_rate["rate"])
@@ -322,6 +322,7 @@ class SavingPlanService:
             "bank_id": best_rate["bank_id"],
             "bank_code": best_rate["bank_code"],
             "bank_name": best_rate["bank_name"],
+            "ranking_risk": best_rate["ranking_risk"],
             "term_month": term_month,
             "channel": best_rate["channel"],
             "annual_rate_pct": annual_rate_pct,

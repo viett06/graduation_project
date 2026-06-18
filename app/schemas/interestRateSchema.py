@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import Optional
 from decimal import Decimal
 
+from app.schemas.bankSchema import BankInDBBase
+
 
 class InterestRateBase(BaseModel):
     min_amount: Optional[int] = None
@@ -18,12 +20,8 @@ class InterestRateBase(BaseModel):
 class InterestRateCreate(InterestRateBase):
     create_by: int
 
-class BankOut(BaseModel):
-    id: int
-    name: str
-    code: str
-
-    model_config = ConfigDict(from_attributes=True)
+class BankOut(BankInDBBase):
+    pass
 
 class InterestRateUpdate(BaseModel):
     min_amount: Optional[int] = None

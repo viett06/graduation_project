@@ -353,8 +353,11 @@ def normalize_tool_params(params: dict) -> dict:
     normalized["limit"] = coerce_int(normalized.get("limit")) or MAX_RATE_ROWS_FOR_LLM
     normalized["top_k"] = coerce_int(normalized.get("top_k")) or 4
 
-    for key in ("term_month", "duration_month", "bank_id", "user_id"):
+    for key in ("term_month", "duration_month", "bank_id", "user_id", "risk_group", "risk_level"):
         normalized[key] = coerce_int(normalized.get(key))
+
+    if normalized.get("risk_group") is None and normalized.get("risk_level") is not None:
+        normalized["risk_group"] = normalized["risk_level"]
 
     for key in ("amount", "total_amount", "goal_amount"):
         normalized[key] = coerce_float(normalized.get(key))
@@ -770,7 +773,7 @@ def create_saving_plan(saving_plan_service: SavingPlanService, args: dict):
         goal_amount=goal_amount,
         prefer_rate=(args.get("prefer_rate") or "ONLINE").upper(),
         codes=[code.strip().upper() for code in (args.get("codes") or []) if code],
-        risk_level=args.get("risk_level"),
+        risk_group=args.get("risk_group"),
         notes=args.get("notes"),
     )
 

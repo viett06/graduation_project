@@ -1,7 +1,7 @@
 # app/schemas/savingPlanSchema.py
 import json
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional, Dict, Any
 
 
@@ -24,11 +24,10 @@ class SavingPlanCreate(SavingPlanBase):
     total_amount: float = Field(ge=1_000_000)
     prefer_rate: Optional[str] =  "ONLINE"              # ưu tiên lãi suất online
     codes: Optional[List[str]] = []                    # chỉ chọn ngân hàng có mã trong list này
-    risk_level: Optional[int] = Field(
+    risk_group: Optional[int] = Field(
         default=None,
-        ge=1,
-        le=10,
-        description="Khẩu vị rủi ro người dùng (1-10). Chỉ lấy ngân hàng có ranking_risk <= mức này.",
+        validation_alias=AliasChoices("risk_group", "risk_level"),
+        description="Mã nhóm rủi ro frontend gửi lên. Chỉ lấy ngân hàng có ranking_risk trùng giá trị này.",
     )
 
 class SavingPlanResponse(SavingPlanBase):
@@ -58,11 +57,10 @@ class SavingPlanFixedTermCreate(BaseModel):
     total_amount: float = Field(ge=1_000_000)
     term_month: int
     channel: Optional[str] = None
-    risk_level: Optional[int] = Field(
+    risk_group: Optional[int] = Field(
         default=None,
-        ge=1,
-        le=10,
-        description="Khẩu vị rủi ro người dùng (1-10). Chỉ lấy ngân hàng có ranking_risk <= mức này.",
+        validation_alias=AliasChoices("risk_group", "risk_level"),
+        description="Mã nhóm rủi ro frontend gửi lên. Chỉ lấy ngân hàng có ranking_risk trùng giá trị này.",
     )
 
 class SavingPlanFixedTermResponse(BaseModel):
@@ -70,6 +68,7 @@ class SavingPlanFixedTermResponse(BaseModel):
     bank_id: int
     bank_code: str
     bank_name: str
+    ranking_risk: int = Field(description="Mã nhóm rủi ro của ngân hàng được chọn")
     term_month: int
     channel: str
     annual_rate_pct: float

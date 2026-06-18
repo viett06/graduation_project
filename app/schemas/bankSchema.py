@@ -1,5 +1,3 @@
-from socket import fromfd
-
 from typing import Dict, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import date, datetime
@@ -12,7 +10,10 @@ class BankBase(BaseModel):
     logo_url: Optional[str] = None
     website_url: Optional[str] = None
     rate_source: Optional[str] = None
-    ranking_risk: int = Field(default=5, ge=1, le=10, description="Xếp hạng rủi ro ngân hàng (1-10)")
+    ranking_risk: int = Field(
+        default=2,
+        description="Mã nhóm rủi ro. Các ngân hàng cùng nhóm có cùng giá trị.",
+    )
     status: bool = True
 
 class BankCreate(BankBase):
@@ -25,7 +26,10 @@ class UpdateBank(BaseModel):
     logo_url: Optional[str] = None
     website_url: Optional[str] = None
     rate_source: Optional[str] = None
-    ranking_risk: Optional[int] = Field(default=None, ge=1, le=10)
+    ranking_risk: Optional[int] = Field(
+        default=None,
+        description="Mã nhóm rủi ro. Các ngân hàng cùng nhóm có cùng giá trị.",
+    )
     status: Optional[bool] = True
 
 class InterestRateResponse(BaseModel):
@@ -61,6 +65,7 @@ class BankRateResponse(BaseModel):
     channel: str | None
     updated_at: datetime | None
     rate_source: str | None
+    ranking_risk: int
 
 class InterestCalculateRequest(BaseModel):
     bank_id: int
@@ -91,6 +96,7 @@ class AllBanksOfChatBot(BaseModel):
     type: str
     rate: float
     term_month: int
+    ranking_risk: int
 
 
 class BankProfile:

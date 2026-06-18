@@ -58,7 +58,8 @@ class BankService:
                 code=bank.code,
                 type=bank.type,
                 rate=bank.rate,
-                term_month=bank.term_month
+                term_month=bank.term_month,
+                ranking_risk=bank.ranking_risk,
             )
             list_of_banks.append(bank_data.model_dump())
 
@@ -167,7 +168,8 @@ class BankService:
                     channel=row.channel,
                     rate=float(row.rate) if row.rate else None,
                     updated_at=row.updated_at,
-                    rate_source=row.rate_source
+                    rate_source=row.rate_source,
+                    ranking_risk=row.ranking_risk,
                 )
                 for row in rows
             ]

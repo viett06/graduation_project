@@ -10,10 +10,10 @@ class BankRepository:
         self.session = session
 
     @staticmethod
-    def _risk_level_filter_clause(risk_level: int | None) -> str:
-        if risk_level is None:
+    def _risk_group_filter_clause(risk_group: int | None) -> str:
+        if risk_group is None:
             return ""
-        return "AND b.ranking_risk <= :risk_level"
+        return "AND b.ranking_risk = :risk_group"
 
     def find_bank_by_name(self, name:str)-> Optional[Bank]:
         bank = select(Bank).where(Bank.name == name)
@@ -81,9 +81,9 @@ class BankRepository:
             term_month: int,
             amount: float,
             channel: str | None = None,
-            risk_level: int | None = None,
+            risk_group: int | None = None,
     ):
-        risk_filter = self._risk_level_filter_clause(risk_level)
+        risk_filter = self._risk_group_filter_clause(risk_group)
         query = text(f"""
             SELECT b.id AS bank_id,
                    UPPER(b.code) AS bank_code,
@@ -114,8 +114,8 @@ class BankRepository:
             "amount": amount,
             "channel": channel,
         }
-        if risk_level is not None:
-            params["risk_level"] = risk_level
+        if risk_group is not None:
+            params["risk_group"] = risk_group
         return self.session.execute(query, params).mappings().first()
 
     def commit(self):
@@ -132,7 +132,8 @@ class BankRepository:
                             ir.rate,
                             ir.channel,
                             ir.updated_at,
-                            b.rate_source
+                            b.rate_source,
+                            b.ranking_risk
                      FROM banks AS b
                               JOIN interest_rates AS ir
                                         ON b.id = ir.bank_id
@@ -262,7 +263,8 @@ class BankRepository:
                    UPPER(b.code) as code,
                    UPPER(b.type) as type,
                    ir.rate,
-                   ir.term_month
+                   ir.term_month,
+                   b.ranking_risk
             FROM banks as b
             LEFT JOIN interest_rates AS ir ON b.id = ir.bank_id
             WHERE ir.rate IS NOT NULL
@@ -287,9 +289,9 @@ class BankRepository:
             term_month: int,
             codes: list[str] | None,
             channel: str = "ONLINE",
-            risk_level: int | None = None,
+            risk_group: int | None = None,
     ):
-        risk_filter = self._risk_level_filter_clause(risk_level)
+        risk_filter = self._risk_group_filter_clause(risk_group)
 
         query_text = f"""
                      SELECT b.id, \
@@ -313,8 +315,8 @@ class BankRepository:
             "term_month": term_month,
             "channel": channel,
         }
-        if risk_level is not None:
-            params["risk_level"] = risk_level
+        if risk_group is not None:
+            params["risk_group"] = risk_group
 
         if codes:
             query = text(
