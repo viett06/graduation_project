@@ -493,9 +493,11 @@ class DPOptimizer:
 
     @staticmethod
     def _normalize_demand_rate(rate: float) -> float:
-        # DB thường lưu KKH dạng phần trăm như 0.5 nghĩa là 0.5%/năm.
-        # Nếu giữ nguyên 0.5 thì output sẽ thành 50%/năm.
-        if rate > 0.2:
+        # DB lưu KKH dạng phần trăm: 0.1 = 0.1%/năm, 0.5 = 0.5%/năm.
+        # Giá trị đã chuẩn hóa là thập phân nhỏ: 0.001 = 0.1%/năm.
+        if rate <= 0:
+            return 0.0
+        if rate >= 0.01:
             return rate / 100.0
         return rate
     

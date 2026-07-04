@@ -71,7 +71,7 @@ class RateLimitPolicy:
 
 
 RATE_LIMIT_POLICIES: dict[str, RateLimitPolicy] = {
-    "guest": RateLimitPolicy(capacity=5, refill_rate=0.2, max_requests=20, window_time=60),
+    "guest": RateLimitPolicy(capacity=20, refill_rate=0.2, max_requests=20, window_time=60),
     "user": RateLimitPolicy(capacity=30, refill_rate=1.0, max_requests=120, window_time=60),
     "admin": RateLimitPolicy(capacity=100, refill_rate=5.0, max_requests=600, window_time=60),
 }

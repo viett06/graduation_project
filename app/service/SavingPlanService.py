@@ -95,7 +95,7 @@ class SavingPlanService:
 
             bank_profile = bank_profile_map[bank_code]
             if bank.term_month == 0:
-                bank_profile.demand_rate = annual_rate
+                bank_profile.demand_rate = self._normalize_demand_rate(float(bank.rate))
             else:
                 bank_profile.rates[int(bank.term_month)] = annual_rate
 
@@ -103,8 +103,16 @@ class SavingPlanService:
 
     @staticmethod
     def _normalize_annual_rate(rate: float) -> float:
-        # xem xét sau kkh
         return rate / 100.0 if rate > 1 else rate
+
+    @staticmethod
+    def _normalize_demand_rate(rate: float) -> float:
+        # KKH trong DB thường là 0.1, 0.5 (nghĩa là %/năm), không phải thập phân.
+        if rate <= 0:
+            return 0.0
+        if rate >= 0.01:
+            return rate / 100.0
+        return rate
 
     @staticmethod
     def _limit_top_plans(result: Dict[str, Any], limit: int = MAX_OPTIMIZED_PLANS) -> Dict[str, Any]:
